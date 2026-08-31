@@ -8,17 +8,8 @@ function Guestbook({ slug }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
-  const [audioUrls, setAudioUrls] = useState({})
-  const [audioLoadingId, setAudioLoadingId] = useState(null)
-
   useEffect(() => {
     loadGallery()
-
-    return () => {
-      Object.values(audioUrls).forEach((url) => {
-        URL.revokeObjectURL(url)
-      })
-    }
   }, [slug])
 
   async function loadGallery() {
@@ -61,93 +52,6 @@ function Guestbook({ slug }) {
     }
   }
 
-  async function loadAudio(message) {
-    if (audioUrls[message.id]) {
-      const player =
-        document.getElementById(
-          `public-audio-${message.id}`
-        )
-
-      if (player) {
-        try {
-          await player.play()
-        } catch {
-          // User can press native play button.
-        }
-      }
-
-      return
-    }
-
-    setAudioLoadingId(message.id)
-
-    try {
-      const response = await fetch(
-        `${API_URL}/public/audio/${encodeURIComponent(
-          message.id
-        )}`
-      )
-
-      if (!response.ok) {
-        let messageText =
-          'Unable to load recording.'
-
-        try {
-          const data = await response.json()
-
-          messageText =
-            data.error ||
-            data.message ||
-            messageText
-        } catch {
-          // Response may be binary.
-        }
-
-        throw new Error(messageText)
-      }
-
-      const blob = await response.blob()
-
-      if (!blob.size) {
-        throw new Error(
-          'The audio file is empty.'
-        )
-      }
-
-      const objectUrl =
-        URL.createObjectURL(blob)
-
-      setAudioUrls((current) => ({
-        ...current,
-        [message.id]: objectUrl,
-      }))
-
-      setTimeout(async () => {
-        const player =
-          document.getElementById(
-            `public-audio-${message.id}`
-          )
-
-        if (player) {
-          try {
-            await player.play()
-          } catch {
-            // Browser may require user to press play again.
-          }
-        }
-      }, 100)
-    } catch (error) {
-      console.error(
-        'Public audio playback error:',
-        error
-      )
-
-      alert(error.message)
-    } finally {
-      setAudioLoadingId(null)
-    }
-  }
-
   async function downloadMessage(message) {
     try {
       const response = await fetch(
@@ -157,25 +61,19 @@ function Guestbook({ slug }) {
       )
 
       if (!response.ok) {
-        throw new Error(
-          'Unable to download recording.'
-        )
+        throw new Error('Unable to download recording.')
       }
 
       const blob = await response.blob()
-      const objectUrl =
-        URL.createObjectURL(blob)
+      const objectUrl = URL.createObjectURL(blob)
 
-      const link =
-        document.createElement('a')
-
+      const link = document.createElement('a')
       link.href = objectUrl
       link.download =
         message.file_name ||
         `message-${message.message_number}`
 
       document.body.appendChild(link)
-
       link.click()
       link.remove()
 
@@ -199,17 +97,10 @@ function Guestbook({ slug }) {
     return (
       <div className="public-gallery-page">
         <div className="public-gallery-card">
-          <div className="public-gallery-icon">
-            🎙
-          </div>
-
-          <h1>
-            Guestbook unavailable
-          </h1>
-
+          <div className="public-gallery-icon">🎙</div>
+          <h1>Guestbook unavailable</h1>
           <p>
-            {error ||
-              'This audio guestbook could not be found.'}
+            {error || 'This audio guestbook could not be found.'}
           </p>
         </div>
       </div>
@@ -219,11 +110,8 @@ function Guestbook({ slug }) {
   return (
     <div className="public-gallery-page">
       <div className="public-gallery-container">
-
         <header className="public-gallery-header">
-          <div className="public-gallery-icon">
-            🎙
-          </div>
+          <div className="public-gallery-icon">🎙</div>
 
           <div className="public-gallery-kicker">
             AUDIO GUESTBOOK
@@ -245,19 +133,14 @@ function Guestbook({ slug }) {
         <section className="public-gallery-summary">
           <strong>
             {messages.length}{' '}
-            {messages.length === 1
-              ? 'Message'
-              : 'Messages'}
+            {messages.length === 1 ? 'Message' : 'Messages'}
           </strong>
 
           <span>
             {formatDuration(
               messages.reduce(
                 (total, message) =>
-                  total +
-                  Number(
-                    message.duration || 0
-                  ),
+                  total + Number(message.duration || 0),
                 0
               )
             )}{' '}
@@ -267,53 +150,34 @@ function Guestbook({ slug }) {
 
         {messages.length === 0 ? (
           <div className="public-gallery-empty">
-            <div className="public-gallery-icon">
-              ♫
-            </div>
-
-            <h2>
-              No messages yet
-            </h2>
-
+            <div className="public-gallery-icon">♫</div>
+            <h2>No messages yet</h2>
             <p>
-              Audio messages for this event
-              will appear here.
+              Audio messages for this event will appear here.
             </p>
           </div>
         ) : (
           <div className="public-message-list">
-
             {messages.map((message) => (
-
               <article
                 className="public-message-card"
                 key={message.id}
               >
-
                 <div className="public-message-number">
                   {message.message_number}
                 </div>
 
                 <div className="public-message-main">
-
                   <div className="public-message-heading">
-
                     <div>
                       <h2>
-                        {message.custom_label ||
-                          `Message ${message.message_number}`}
+                        Message {message.message_number}
                       </h2>
 
                       <p>
-                        {formatDuration(
-                          message.duration
-                        )}
-
+                        {formatDuration(message.duration)}
                         {' · '}
-
-                        {formatFileSize(
-                          message.file_size
-                        )}
+                        {formatFileSize(message.file_size)}
                       </p>
                     </div>
 
@@ -321,63 +185,30 @@ function Guestbook({ slug }) {
                       type="button"
                       className="public-download-button"
                       onClick={() =>
-                        downloadMessage(
-                          message
-                        )
+                        downloadMessage(message)
                       }
                     >
                       ↓ Download
                     </button>
-
                   </div>
 
-                  {!audioUrls[message.id] ? (
-
-                    <button
-                      type="button"
-                      className="public-download-button"
-                      disabled={
-                        audioLoadingId ===
-                        message.id
-                      }
-                      onClick={() =>
-                        loadAudio(message)
-                      }
-                    >
-                      {audioLoadingId ===
+                  <audio
+                    className="public-audio-player"
+                    src={`${API_URL}/public/audio/${encodeURIComponent(
                       message.id
-                        ? 'Loading...'
-                        : '▶ Play Recording'}
-                    </button>
-
-                  ) : (
-
-                    <audio
-                      id={`public-audio-${message.id}`}
-                      className="public-audio-player"
-                      src={
-                        audioUrls[
-                          message.id
-                        ]
-                      }
-                      controls
-                      preload="metadata"
-                    />
-
-                  )}
-
+                    )}`}
+                    controls
+                    preload="metadata"
+                  />
                 </div>
-
               </article>
             ))}
-
           </div>
         )}
 
         <footer className="public-gallery-footer">
           Audio Guestbook
         </footer>
-
       </div>
     </div>
   )
@@ -386,102 +217,57 @@ function Guestbook({ slug }) {
 function formatDate(date) {
   if (!date) return ''
 
-  const parsedDate =
-    new Date(
-      `${date}T00:00:00`
-    )
+  const parsedDate = new Date(`${date}T00:00:00`)
 
-  if (
-    Number.isNaN(
-      parsedDate.getTime()
-    )
-  ) {
+  if (Number.isNaN(parsedDate.getTime())) {
     return date
   }
 
-  return parsedDate.toLocaleDateString(
-    'en-US',
-    {
-      month: 'long',
-      day: 'numeric',
-      year: 'numeric',
-    }
-  )
+  return parsedDate.toLocaleDateString('en-US', {
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric',
+  })
 }
 
 function formatDuration(seconds) {
-  const totalSeconds =
-    Number(seconds || 0)
+  const totalSeconds = Number(seconds || 0)
 
-  const hours =
-    Math.floor(
-      totalSeconds / 3600
-    )
-
-  const minutes =
-    Math.floor(
-      (totalSeconds % 3600) /
-        60
-    )
-
-  const remainingSeconds =
-    Math.floor(
-      totalSeconds % 60
-    )
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor(
+    (totalSeconds % 3600) / 60
+  )
+  const remainingSeconds = Math.floor(
+    totalSeconds % 60
+  )
 
   if (hours > 0) {
-    return `${hours}:${String(
-      minutes
-    ).padStart(
+    return `${hours}:${String(minutes).padStart(
       2,
       '0'
-    )}:${String(
-      remainingSeconds
-    ).padStart(
-      2,
-      '0'
-    )}`
+    )}:${String(remainingSeconds).padStart(2, '0')}`
   }
 
-  return `${minutes}:${String(
-    remainingSeconds
-  ).padStart(
+  return `${minutes}:${String(remainingSeconds).padStart(
     2,
     '0'
   )}`
 }
 
 function formatFileSize(bytes) {
-  const size =
-    Number(bytes || 0)
+  const size = Number(bytes || 0)
 
-  if (!size) {
-    return '0 B'
-  }
+  if (!size) return '0 B'
 
-  const units = [
-    'B',
-    'KB',
-    'MB',
-    'GB',
-  ]
+  const units = ['B', 'KB', 'MB', 'GB']
+  const index = Math.min(
+    Math.floor(Math.log(size) / Math.log(1024)),
+    units.length - 1
+  )
 
-  const index =
-    Math.min(
-      Math.floor(
-        Math.log(size) /
-          Math.log(1024)
-      ),
-      units.length - 1
-    )
+  const value = size / 1024 ** index
 
-  const value =
-    size /
-    1024 ** index
-
-  return `${value.toFixed(
-    index === 0 ? 0 : 1
-  )} ${units[index]}`
+  return `${value.toFixed(index === 0 ? 0 : 1)} ${units[index]}`
 }
 
 export default Guestbook
