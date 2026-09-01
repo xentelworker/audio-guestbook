@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import JSZip from 'jszip'
 
 const API_URL = import.meta.env.VITE_AUDIO_API_URL
@@ -14,6 +14,7 @@ function Guestbook({ slug }) {
   const [downloadAllStatus, setDownloadAllStatus] = useState('')
   const [continuousPlay, setContinuousPlay] = useState(false)
   const [continuousIndex, setContinuousIndex] = useState(-1)
+  const activePlaybackRequestRef = useRef(0)
 
   useEffect(() => {
     loadGallery()
@@ -110,39 +111,40 @@ function Guestbook({ slug }) {
   }
 
   function stopOtherAudioPlayers(activeMessageId = null) {
-    document
-      .querySelectorAll('.public-audio-player')
-      .forEach((player) => {
-        const activeId =
-          activeMessageId
-            ? `public-audio-${activeMessageId}`
-            : null
+    const activeId =
+      activeMessageId
+        ? `public-audio-${activeMessageId}`
+        : null
 
+    document
+      .querySelectorAll('audio')
+      .forEach((player) => {
         if (!activeId || player.id !== activeId) {
           player.pause()
+
+          try {
+            player.currentTime = player.currentTime
+          } catch {
+            // Ignore browsers that do not allow this assignment.
+          }
         }
       })
   }
 
+  function beginNewPlaybackRequest() {
+    activePlaybackRequestRef.current += 1
+    return activePlaybackRequestRef.current
+  }
+
+  function isCurrentPlaybackRequest(requestId) {
+    return (
+      activePlaybackRequestRef.current === requestId
+    )
+  }
+
   async function loadAudio(message) {
-    if (audioUrls[message.id]) {
-      stopOtherAudioPlayers(message.id)
-
-      const player =
-        document.getElementById(
-          `public-audio-${message.id}`
-        )
-
-      if (player) {
-        try {
-          await player.play()
-        } catch {
-          // User can press the native play button.
-        }
-      }
-
-      return
-    }
+    const requestId =
+      beginNewPlaybackRequest()
 
     stopOtherAudioPlayers(message.id)
 
@@ -151,26 +153,40 @@ function Guestbook({ slug }) {
       setContinuousIndex(-1)
     }
 
-    setAudioLoadingId(message.id)
-
     try {
+      setAudioLoadingId(message.id)
+
       await getOrLoadAudioUrl(message)
 
-      setTimeout(async () => {
-        const player =
-          document.getElementById(
-            `public-audio-${message.id}`
-          )
+      if (!isCurrentPlaybackRequest(requestId)) {
+        return
+      }
 
-        if (player) {
-          try {
-            await player.play()
-          } catch {
-            // Browser may require a second user click.
-          }
-        }
-      }, 100)
+      await new Promise((resolve) =>
+        setTimeout(resolve, 75)
+      )
+
+      if (!isCurrentPlaybackRequest(requestId)) {
+        return
+      }
+
+      stopOtherAudioPlayers(message.id)
+
+      const player =
+        document.getElementById(
+          `public-audio-${message.id}`
+        )
+
+      if (!player) {
+        return
+      }
+
+      await player.play()
     } catch (error) {
+      if (!isCurrentPlaybackRequest(requestId)) {
+        return
+      }
+
       console.error(
         'Public audio playback error:',
         error
@@ -178,7 +194,9 @@ function Guestbook({ slug }) {
 
       alert(error.message)
     } finally {
-      setAudioLoadingId(null)
+      if (isCurrentPlaybackRequest(requestId)) {
+        setAudioLoadingId(null)
+      }
     }
   }
 
@@ -187,12 +205,18 @@ function Guestbook({ slug }) {
       index < 0 ||
       index >= messages.length
     ) {
+      beginNewPlaybackRequest()
+      stopOtherAudioPlayers()
       setContinuousPlay(false)
       setContinuousIndex(-1)
       return
     }
 
-    const message = messages[index]
+    const requestId =
+      beginNewPlaybackRequest()
+
+    const message =
+      messages[index]
 
     stopOtherAudioPlayers(message.id)
 
@@ -203,37 +227,44 @@ function Guestbook({ slug }) {
 
       await getOrLoadAudioUrl(message)
 
-      setTimeout(async () => {
-        const player =
-          document.getElementById(
-            `public-audio-${message.id}`
-          )
+      if (!isCurrentPlaybackRequest(requestId)) {
+        return
+      }
 
-        if (!player) {
-          return
-        }
+      await new Promise((resolve) =>
+        setTimeout(resolve, 75)
+      )
 
-        try {
-          await player.play()
+      if (!isCurrentPlaybackRequest(requestId)) {
+        return
+      }
 
-          document
-            .getElementById(
-              `public-message-card-${message.id}`
-            )
-            ?.scrollIntoView({
-              behavior: 'smooth',
-              block: 'center',
-            })
-        } catch {
-          setContinuousPlay(false)
-          setContinuousIndex(-1)
+      stopOtherAudioPlayers(message.id)
 
-          alert(
-            'Your browser blocked automatic playback. Press Play All again.'
-          )
-        }
-      }, 100)
+      const player =
+        document.getElementById(
+          `public-audio-${message.id}`
+        )
+
+      if (!player) {
+        return
+      }
+
+      await player.play()
+
+      document
+        .getElementById(
+          `public-message-card-${message.id}`
+        )
+        ?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'center',
+        })
     } catch (error) {
+      if (!isCurrentPlaybackRequest(requestId)) {
+        return
+      }
+
       console.error(
         'Continuous playback error:',
         error
@@ -241,9 +272,15 @@ function Guestbook({ slug }) {
 
       setContinuousPlay(false)
       setContinuousIndex(-1)
-      alert(error.message)
+
+      alert(
+        error?.message ||
+        'Unable to play this recording.'
+      )
     } finally {
-      setAudioLoadingId(null)
+      if (isCurrentPlaybackRequest(requestId)) {
+        setAudioLoadingId(null)
+      }
     }
   }
 
@@ -261,14 +298,11 @@ function Guestbook({ slug }) {
   }
 
   function stopContinuousPlay() {
+    beginNewPlaybackRequest()
     setContinuousPlay(false)
     setContinuousIndex(-1)
-
-    document
-      .querySelectorAll('.public-audio-player')
-      .forEach((player) => {
-        player.pause()
-      })
+    setAudioLoadingId(null)
+    stopOtherAudioPlayers()
   }
 
   function handleContinuousEnded(index) {
@@ -622,15 +656,25 @@ function Guestbook({ slug }) {
                       }
                       controls
                       preload="metadata"
-                      onPlay={() => {
+                      onPlay={(event) => {
                         stopOtherAudioPlayers(message.id)
+
+                        document
+                          .querySelectorAll('audio')
+                          .forEach((player) => {
+                            if (player !== event.currentTarget) {
+                              player.pause()
+                            }
+                          })
 
                         if (
                           continuousPlay &&
                           continuousIndex !== index
                         ) {
+                          beginNewPlaybackRequest()
                           setContinuousPlay(false)
                           setContinuousIndex(-1)
+                          setAudioLoadingId(null)
                         }
                       }}
                       onEnded={() =>
