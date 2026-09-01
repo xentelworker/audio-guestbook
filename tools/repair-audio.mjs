@@ -1,35 +1,634 @@
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
-import { spawn } from 'node:child_process'
+import os from 'node:os'
 import readline from 'node:readline/promises'
-import { stdin as input, stdout as output } from 'node:process'
+import {
+  stdin as input,
+  stdout as output,
+} from 'node:process'
+import { spawn } from 'node:child_process'
 import ffmpegPath from 'ffmpeg-static'
+import { createClient } from '@supabase/supabase-js'
+
+// ============================================================
+// PROJECT / ENVIRONMENT FILES
+// ============================================================
+
+const PROJECT_DIR = process.cwd()
+
+const ENV_PATH =
+  path.join(PROJECT_DIR, '.env')
+
+const ENV_LOCAL_PATH =
+  path.join(PROJECT_DIR, '.env.local')
+
+const ENV_REPAIR_PATH =
+  path.join(PROJECT_DIR, '.env.repair')
+
+// ============================================================
+// READ ENVIRONMENT FILE
+// ============================================================
+
+function readEnvFile(filePath) {
+  if (!fs.existsSync(filePath)) {
+    return {}
+  }
+
+  const values = {}
+
+  const lines =
+    fs.readFileSync(
+      filePath,
+      'utf8'
+    ).split(/\r?\n/)
+
+  for (const rawLine of lines) {
+    const line =
+      rawLine.trim()
+
+    if (
+      !line ||
+      line.startsWith('#')
+    ) {
+      continue
+    }
+
+    const equalsIndex =
+      line.indexOf('=')
+
+    if (equalsIndex < 1) {
+      continue
+    }
+
+    const key =
+      line
+        .slice(
+          0,
+          equalsIndex
+        )
+        .trim()
+
+    let value =
+      line
+        .slice(
+          equalsIndex + 1
+        )
+        .trim()
+
+    if (
+      (
+        value.startsWith('"') &&
+        value.endsWith('"')
+      ) ||
+      (
+        value.startsWith("'") &&
+        value.endsWith("'")
+      )
+    ) {
+      value =
+        value.slice(1, -1)
+    }
+
+    values[key] = value
+  }
+
+  return values
+}
+
+// ============================================================
+// MERGE ENVIRONMENT
+// ============================================================
+
+const env = {
+  ...readEnvFile(ENV_PATH),
+  ...readEnvFile(ENV_LOCAL_PATH),
+  ...readEnvFile(ENV_REPAIR_PATH),
+  ...process.env,
+}
 
 // ============================================================
 // CONFIGURATION
 // ============================================================
 
-const API_URL =
-  process.env.AUDIO_API_URL ||
-  'https://audio-guestbook-api.internt-2000.workers.dev'
-
 const SUPABASE_URL =
-  process.env.SUPABASE_URL ||
-  process.env.VITE_SUPABASE_URL
+  env.VITE_SUPABASE_URL ||
+  env.SUPABASE_URL
 
 const SUPABASE_ANON_KEY =
-  process.env.SUPABASE_ANON_KEY ||
-  process.env.VITE_SUPABASE_ANON_KEY
+  env.VITE_SUPABASE_ANON_KEY ||
+  env.SUPABASE_ANON_KEY
+
+const API_URL =
+  (
+    env.VITE_AUDIO_API_URL ||
+    env.AUDIO_API_URL ||
+    'https://audio-guestbook-api.snapbooth.workers.dev'
+  ).replace(/\/$/, '')
+
+const REPAIR_EMAIL =
+  env.REPAIR_EMAIL
+
+const REPAIR_PASSWORD =
+  env.REPAIR_PASSWORD
 
 // ============================================================
-// TERMINAL
+// VALIDATE CONFIGURATION
 // ============================================================
 
-const rl = readline.createInterface({
-  input,
-  output,
-})
+if (
+  !SUPABASE_URL ||
+  !SUPABASE_ANON_KEY
+) {
+  console.error(
+    '\n============================================'
+  )
+
+  console.error(
+    ' AUDIO GUESTBOOK REPAIR TOOL'
+  )
+
+  console.error(
+    '============================================'
+  )
+
+  console.error(
+    '\nMissing Supabase configuration.'
+  )
+
+  console.error(
+    '\n.env.local must contain:'
+  )
+
+  console.error(
+    'VITE_SUPABASE_URL=...'
+  )
+
+  console.error(
+    'VITE_SUPABASE_ANON_KEY=...'
+  )
+
+  console.error(
+    'VITE_AUDIO_API_URL=https://audio-guestbook-api.snapbooth.workers.dev'
+  )
+
+  console.error('')
+
+  process.exit(1)
+}
+
+if (
+  !REPAIR_EMAIL ||
+  !REPAIR_PASSWORD
+) {
+  console.error(
+    '\n============================================'
+  )
+
+  console.error(
+    ' AUDIO GUESTBOOK REPAIR TOOL'
+  )
+
+  console.error(
+    '============================================'
+  )
+
+  console.error(
+    '\nMissing repair login credentials.'
+  )
+
+  console.error(
+    '\n.env.repair must contain:'
+  )
+
+  console.error(
+    'REPAIR_EMAIL=your-email@example.com'
+  )
+
+  console.error(
+    'REPAIR_PASSWORD=your-password'
+  )
+
+  console.error('')
+
+  process.exit(1)
+}
+
+if (!ffmpegPath) {
+  console.error(
+    '\nffmpeg-static could not find an FFmpeg binary.'
+  )
+
+  process.exit(1)
+}
+
+// ============================================================
+// READLINE
+// ============================================================
+
+const rl =
+  readline.createInterface({
+    input,
+    output,
+  })
+
+// ============================================================
+// API FETCH
+// ============================================================
+
+async function apiFetch(
+  token,
+  route,
+  options = {}
+) {
+  return fetch(
+    `${API_URL}${route}`,
+    {
+      ...options,
+
+      headers: {
+        Authorization:
+          `Bearer ${token}`,
+
+        ...(options.headers || {}),
+      },
+    }
+  )
+}
+
+// ============================================================
+// API JSON
+// ============================================================
+
+async function apiJson(
+  token,
+  route,
+  options = {}
+) {
+  const response =
+    await apiFetch(
+      token,
+      route,
+      options
+    )
+
+  const text =
+    await response.text()
+
+  let data = null
+
+  if (text) {
+    try {
+      data =
+        JSON.parse(text)
+    } catch {
+      data = text
+    }
+  }
+
+  if (!response.ok) {
+    const message =
+      typeof data === 'object'
+        ? (
+            data?.message ||
+            data?.error ||
+            JSON.stringify(data)
+          )
+        : String(
+            data ||
+            response.statusText
+          )
+
+    throw new Error(
+      `${response.status} ${message}`
+    )
+  }
+
+  return data
+}
+
+// ============================================================
+// RUN FFMPEG
+// ============================================================
+
+function runFfmpeg(args) {
+  return new Promise(
+    (resolve, reject) => {
+      const child =
+        spawn(
+          ffmpegPath,
+          args,
+          {
+            stdio: [
+              'ignore',
+              'pipe',
+              'pipe',
+            ],
+          }
+        )
+
+      let stderr = ''
+
+      child.stderr.on(
+        'data',
+        (chunk) => {
+          stderr +=
+            chunk.toString()
+        }
+      )
+
+      child.on(
+        'error',
+        reject
+      )
+
+      child.on(
+        'close',
+        (code) => {
+          if (code === 0) {
+            resolve(stderr)
+
+            return
+          }
+
+          reject(
+            new Error(
+              `FFmpeg exited with code ${code}\n${stderr.slice(
+                -2500
+              )}`
+            )
+          )
+        }
+      )
+    }
+  )
+}
+
+// ============================================================
+// GET DURATION FROM FFMPEG OUTPUT
+// ============================================================
+
+function getDurationFromFfmpegOutput(
+  stderr
+) {
+  const match =
+    stderr.match(
+      /Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/
+    )
+
+  if (!match) {
+    return 0
+  }
+
+  const hours =
+    Number(match[1])
+
+  const minutes =
+    Number(match[2])
+
+  const seconds =
+    Number(match[3])
+
+  return Math.max(
+    0,
+    Math.round(
+      hours * 3600 +
+      minutes * 60 +
+      seconds
+    )
+  )
+}
+
+// ============================================================
+// CONVERT AUDIO TO TRUE MP3
+// ============================================================
+
+async function convertToMp3(
+  inputPath,
+  outputPath
+) {
+  const stderr =
+    await runFfmpeg([
+      '-hide_banner',
+      '-y',
+
+      '-i',
+      inputPath,
+
+      '-vn',
+
+      '-codec:a',
+      'libmp3lame',
+
+      '-b:a',
+      '128k',
+
+      '-ar',
+      '44100',
+
+      '-ac',
+      '1',
+
+      outputPath,
+    ])
+
+  return (
+    getDurationFromFfmpegOutput(
+      stderr
+    )
+  )
+}
+
+// ============================================================
+// SAFE FILE NAME
+// ============================================================
+
+function safeFileName(
+  name,
+  fallback
+) {
+  return String(
+    name ||
+    fallback ||
+    'recording.mp3'
+  )
+    .replace(
+      /[<>:"/\\|?*\x00-\x1F]/g,
+      '_'
+    )
+    .slice(
+      0,
+      180
+    )
+}
+
+// ============================================================
+// DOWNLOAD ORIGINAL MESSAGE
+// ============================================================
+
+async function downloadMessage(
+  token,
+  message,
+  tempDir
+) {
+  const response =
+    await apiFetch(
+      token,
+      `/audio/${encodeURIComponent(
+        message.id
+      )}?download=1`
+    )
+
+  if (!response.ok) {
+    throw new Error(
+      `Download failed (${response.status})`
+    )
+  }
+
+  const bytes =
+    Buffer.from(
+      await response.arrayBuffer()
+    )
+
+  if (!bytes.length) {
+    throw new Error(
+      'Downloaded audio file is empty.'
+    )
+  }
+
+  const fileName =
+    safeFileName(
+      message.file_name,
+      `message-${message.message_number}.mp3`
+    )
+
+  const inputPath =
+    path.join(
+      tempDir,
+      `input-${message.id}-${fileName}`
+    )
+
+  fs.writeFileSync(
+    inputPath,
+    bytes
+  )
+
+  return {
+    inputPath,
+    originalSize:
+      bytes.length,
+  }
+}
+
+// ============================================================
+// REPAIR ONE MESSAGE
+// ============================================================
+
+async function repairMessage(
+  token,
+  message,
+  tempDir
+) {
+  const {
+    inputPath,
+    originalSize,
+  } =
+    await downloadMessage(
+      token,
+      message,
+      tempDir
+    )
+
+  const outputPath =
+    path.join(
+      tempDir,
+      `repaired-${message.id}.mp3`
+    )
+
+  const duration =
+    await convertToMp3(
+      inputPath,
+      outputPath
+    )
+
+  const repaired =
+    fs.readFileSync(
+      outputPath
+    )
+
+  if (!repaired.length) {
+    throw new Error(
+      'FFmpeg produced an empty repaired file.'
+    )
+  }
+
+  const response =
+    await apiFetch(
+      token,
+      `/repair/message/${encodeURIComponent(
+        message.id
+      )}`,
+      {
+        method: 'POST',
+
+        headers: {
+          'Content-Type':
+            'audio/mpeg',
+
+          'X-File-Size':
+            String(
+              repaired.length
+            ),
+
+          'X-Duration':
+            String(
+              duration || 0
+            ),
+        },
+
+        body: repaired,
+      }
+    )
+
+  const text =
+    await response.text()
+
+  let data = null
+
+  if (text) {
+    try {
+      data =
+        JSON.parse(text)
+    } catch {
+      data = text
+    }
+  }
+
+  if (!response.ok) {
+    const messageText =
+      typeof data === 'object'
+        ? (
+            data?.message ||
+            data?.error ||
+            JSON.stringify(data)
+          )
+        : String(
+            data ||
+            response.statusText
+          )
+
+    throw new Error(
+      messageText
+    )
+  }
+
+  return {
+    duration,
+    originalSize,
+    newSize:
+      repaired.length,
+    result: data,
+  }
+}
 
 // ============================================================
 // MAIN
@@ -37,123 +636,161 @@ const rl = readline.createInterface({
 
 async function main() {
   console.log('')
-  console.log('========================================')
-  console.log(' Audio Guestbook Repair Tool')
-  console.log('========================================')
-  console.log('')
-
-  if (!ffmpegPath) {
-    throw new Error(
-      'ffmpeg-static was not found. Run: npm install --save-dev ffmpeg-static'
-    )
-  }
-
-  if (!SUPABASE_URL) {
-    throw new Error(
-      'VITE_SUPABASE_URL was not found in your environment.'
-    )
-  }
-
-  if (!SUPABASE_ANON_KEY) {
-    throw new Error(
-      'VITE_SUPABASE_ANON_KEY was not found in your environment.'
-    )
-  }
-
-  console.log('This tool repairs legacy MP2 recordings')
-  console.log('by converting them to browser-compatible MP3.')
-  console.log('')
-
-  // ----------------------------------------------------------
-  // LOGIN
-  // ----------------------------------------------------------
-
-const email =
-  process.env.REPAIR_EMAIL ||
-  (
-    await rl.question(
-      'Supabase admin email: '
-    )
-  ).trim()
-
-const password =
-  process.env.REPAIR_PASSWORD ||
-  await rl.question(
-    'Supabase password: '
-  )
-
-if (!email) {
-  throw new Error(
-    'Supabase email is required.'
-  )
-}
-
-if (!password) {
-  throw new Error(
-    'Supabase password is required.'
-  )
-}
-
-if (
-  process.env.REPAIR_EMAIL &&
-  process.env.REPAIR_PASSWORD
-) {
   console.log(
-    `Using saved login: ${email}`
+    '============================================'
   )
-}
+  console.log(
+    ' AUDIO GUESTBOOK — AUDIO REPAIR TOOL'
+  )
+  console.log(
+    '============================================'
+  )
+  console.log(
+    ' MP2 / incompatible audio -> browser MP3'
+  )
+  console.log(
+    '============================================'
+  )
   console.log('')
-  console.log('Signing in...')
+
+  console.log(
+    `API: ${API_URL}`
+  )
+
+  console.log(
+    `Supabase: ${SUPABASE_URL}`
+  )
+
+  console.log(
+    `Using saved login: ${REPAIR_EMAIL}`
+  )
+
+  console.log('')
+
+  if (
+    API_URL.includes(
+      'internt-2000'
+    )
+  ) {
+    console.error(
+      'WARNING: Old internt-2000 API domain detected.'
+    )
+
+    console.error(
+      'Update VITE_AUDIO_API_URL in .env.local.'
+    )
+
+    console.error('')
+  }
+
+  // ==========================================================
+  // LOGIN
+  // ==========================================================
+
+  console.log(
+    'Signing in...'
+  )
+
+  const supabase =
+    createClient(
+      SUPABASE_URL,
+      SUPABASE_ANON_KEY
+    )
+
+  const {
+    data,
+    error,
+  } =
+    await supabase.auth
+      .signInWithPassword({
+        email:
+          REPAIR_EMAIL,
+
+        password:
+          REPAIR_PASSWORD,
+      })
+
+  if (
+    error ||
+    !data?.session
+      ?.access_token
+  ) {
+    throw new Error(
+      error?.message ||
+      'Supabase login failed.'
+    )
+  }
 
   const token =
-    await signIn(
-      email,
-      password
-    )
+    data.session
+      .access_token
 
-  console.log('Login successful.')
-  console.log('')
+  console.log(
+    'Login successful.'
+  )
 
-  // ----------------------------------------------------------
-  // EVENTS
-  // ----------------------------------------------------------
+  // ==========================================================
+  // GET EVENTS
+  // ==========================================================
 
-  const eventsResponse =
-    await apiFetch(
-      '/events',
-      token
+  console.log(
+    '\nLoading events...'
+  )
+
+  const eventsData =
+    await apiJson(
+      token,
+      '/events'
     )
 
   const events =
-    eventsResponse.events || []
+    Array.isArray(
+      eventsData
+    )
+      ? eventsData
+      : (
+          eventsData?.events ||
+          []
+        )
 
   if (!events.length) {
-    console.log(
-      'No events were found.'
+    throw new Error(
+      'No events were returned by the API.'
     )
-
-    return
   }
 
-  console.log('Events:')
+  console.log(
+    '\nEvents:'
+  )
 
   events.forEach(
     (event, index) => {
       console.log(
-        ` ${index + 1}. ${event.name}  [${event.slug}]`
+        `${String(
+          index + 1
+        ).padStart(
+          2,
+          ' '
+        )}. ${event.name}  [${event.slug}]`
       )
     }
   )
 
-  console.log('')
+  // ==========================================================
+  // SELECT EVENT
+  // ==========================================================
 
   const eventAnswer =
-    await rl.question(
-      'Choose event number to repair: '
-    )
+    (
+      await rl.question(
+        '\nChoose event number to repair: '
+      )
+    ).trim()
 
   const eventIndex =
-    Number(eventAnswer) - 1
+    Number(
+      eventAnswer
+    ) - 1
 
   if (
     !Number.isInteger(
@@ -164,302 +801,47 @@ if (
       events.length
   ) {
     throw new Error(
-      'Invalid event selection.'
+      'Invalid event number.'
     )
   }
 
-  const selectedEvent =
-    events[eventIndex]
+  const event =
+    events[
+      eventIndex
+    ]
 
-  console.log('')
-  console.log(
-    `Selected: ${selectedEvent.name}`
-  )
+  // ==========================================================
+  // GET MESSAGES
+  // ==========================================================
 
-  // ----------------------------------------------------------
-  // MESSAGES
-  // ----------------------------------------------------------
-
-  const messagesResponse =
-    await apiFetch(
+  const messagesData =
+    await apiJson(
+      token,
       `/messages/${encodeURIComponent(
-        selectedEvent.id
-      )}`,
-      token
+        event.id
+      )}`
     )
 
   const messages =
-    messagesResponse.messages ||
-    []
-
-  console.log(
-    `Messages: ${messages.length}`
-  )
-
-  console.log('')
+    Array.isArray(
+      messagesData
+    )
+      ? messagesData
+      : (
+          messagesData
+            ?.messages ||
+          []
+        )
 
   if (!messages.length) {
-    console.log(
-      'This event has no recordings.'
-    )
-
-    return
-  }
-
-  // ----------------------------------------------------------
-  // MODE
-  // ----------------------------------------------------------
-
-  console.log(
-    'What would you like to repair?'
-  )
-
-  console.log('')
-  console.log(
-    ' 1. Repair ONE message'
-  )
-
-  console.log(
-    ' 2. Repair ALL messages'
-  )
-
-  console.log(
-    ' 3. Cancel'
-  )
-
-  console.log('')
-
-  const mode =
-    (
-      await rl.question(
-        'Choose 1, 2 or 3: '
-      )
-    ).trim()
-
-  if (mode === '3') {
-    console.log('')
-    console.log(
-      'Repair cancelled.'
-    )
-
-    return
-  }
-
-  if (mode === '1') {
-    await chooseSingleMessage(
-      selectedEvent,
-      messages,
-      token
-    )
-
-    return
-  }
-
-  if (mode === '2') {
-    await repairAllMessages(
-      selectedEvent,
-      messages,
-      token
-    )
-
-    return
-  }
-
-  throw new Error(
-    'Invalid selection.'
-  )
-}
-
-// ============================================================
-// SINGLE MESSAGE MODE
-// ============================================================
-
-async function chooseSingleMessage(
-  event,
-  messages,
-  token
-) {
-  console.log('')
-  console.log('Recordings:')
-  console.log('')
-
-  messages.forEach(
-    (message, index) => {
-      const label =
-        message.custom_label ||
-        `Message ${message.message_number}`
-
-      const file =
-        message.file_name ||
-        'recording'
-
-      console.log(
-        ` ${index + 1}. ${label}  [${file}]`
-      )
-    }
-  )
-
-  console.log('')
-
-  const answer =
-    await rl.question(
-      'Choose message number to repair: '
-    )
-
-  const index =
-    Number(answer) - 1
-
-  if (
-    !Number.isInteger(index) ||
-    index < 0 ||
-    index >=
-      messages.length
-  ) {
     throw new Error(
-      'Invalid message selection.'
+      'This event has no active messages.'
     )
   }
 
-  const message =
-    messages[index]
-
   console.log('')
   console.log(
-    '----------------------------------------'
-  )
-
-  console.log(
-    `Event: ${event.name}`
-  )
-
-  console.log(
-    `Message: ${
-      message.custom_label ||
-      `Message ${message.message_number}`
-    }`
-  )
-
-  console.log(
-    `File: ${
-      message.file_name ||
-      'recording'
-    }`
-  )
-
-  console.log(
-    '----------------------------------------'
-  )
-
-  console.log('')
-
-  console.log(
-    'Only this ONE recording will be repaired.'
-  )
-
-  console.log(
-    'The Worker will back up the original R2 file first.'
-  )
-
-  console.log('')
-
-  const confirm =
-    (
-      await rl.question(
-        `Type REPAIR to repair Message ${message.message_number}: `
-      )
-    ).trim()
-
-  if (confirm !== 'REPAIR') {
-    console.log('')
-    console.log(
-      'Repair cancelled.'
-    )
-
-    return
-  }
-
-  console.log('')
-
-  try {
-    const result =
-      await repairMessage(
-        message,
-        token
-      )
-
-    console.log('')
-    console.log(
-      '========================================'
-    )
-
-    console.log(
-      ' REPAIR SUCCESSFUL'
-    )
-
-    console.log(
-      '========================================'
-    )
-
-    console.log('')
-
-    console.log(
-      `Message ${message.message_number} was repaired.`
-    )
-
-    console.log(
-      `Original size: ${formatBytes(
-        result.originalSize
-      )}`
-    )
-
-    console.log(
-      `New size: ${formatBytes(
-        result.newSize
-      )}`
-    )
-
-    if (
-      result.duration > 0
-    ) {
-      console.log(
-        `Duration: ${result.duration} seconds`
-      )
-    }
-
-    console.log('')
-    console.log(
-      'Now test this message in the public gallery.'
-    )
-  } catch (error) {
-    console.log('')
-    console.error(
-      'REPAIR FAILED'
-    )
-
-    console.error(
-      error.message
-    )
-  }
-}
-
-// ============================================================
-// ALL MESSAGES MODE
-// ============================================================
-
-async function repairAllMessages(
-  event,
-  messages,
-  token
-) {
-  console.log('')
-  console.log(
-    'WARNING: ALL recordings in this event will be processed.'
-  )
-
-  console.log('')
-
-  console.log(
-    `Event: ${event.name}`
+    `Selected: ${event.name}`
   )
 
   console.log(
@@ -467,7 +849,6 @@ async function repairAllMessages(
   )
 
   console.log('')
-
   console.log(
     'Safety behavior:'
   )
@@ -481,149 +862,188 @@ async function repairAllMessages(
   )
 
   console.log(
-    '- Database duration/file size are updated.'
+    '- Existing message ID, filename, label and order are preserved.'
   )
 
   console.log(
-    '- Failed recordings do not stop the entire batch.'
+    '- Duration and file size are updated.'
   )
 
-  console.log('')
+  console.log(
+    '- Failed repairs do not stop the remaining messages.'
+  )
 
-  const confirm =
+  // ==========================================================
+  // REPAIR MODE
+  // ==========================================================
+
+  console.log('')
+  console.log(
+    'Repair mode:'
+  )
+
+  console.log(
+    ' 1. Repair ONE message'
+  )
+
+  console.log(
+    ' 2. Repair ALL messages'
+  )
+
+  console.log(
+    ' 3. Cancel'
+  )
+
+  const mode =
     (
       await rl.question(
-        `Type REPAIR ALL to process all ${messages.length} messages: `
+        '\nChoose repair mode: '
       )
     ).trim()
 
-  if (
-    confirm !== 'REPAIR ALL'
-  ) {
+  let selectedMessages = []
+
+  // ==========================================================
+  // SINGLE MESSAGE MODE
+  // ==========================================================
+
+  if (mode === '1') {
     console.log('')
     console.log(
-      'Bulk repair cancelled.'
+      'Messages:'
+    )
+
+    messages.forEach(
+      (
+        message,
+        index
+      ) => {
+        const label =
+          message
+            .custom_label ||
+          message
+            .file_name ||
+          `Message ${message.message_number}`
+
+        console.log(
+          `${String(
+            index + 1
+          ).padStart(
+            2,
+            ' '
+          )}. Message ${message.message_number}  ${label}`
+        )
+      }
+    )
+
+    const messageAnswer =
+      (
+        await rl.question(
+          '\nChoose message number from the list above: '
+        )
+      ).trim()
+
+    const messageIndex =
+      Number(
+        messageAnswer
+      ) - 1
+
+    if (
+      !Number.isInteger(
+        messageIndex
+      ) ||
+      messageIndex < 0 ||
+      messageIndex >=
+        messages.length
+    ) {
+      throw new Error(
+        'Invalid message selection.'
+      )
+    }
+
+    selectedMessages = [
+      messages[
+        messageIndex
+      ],
+    ]
+
+    const selected =
+      selectedMessages[0]
+
+    const confirmation =
+      (
+        await rl.question(
+          `Type REPAIR to repair Message ${selected.message_number}: `
+        )
+      ).trim()
+
+    if (
+      confirmation !==
+      'REPAIR'
+    ) {
+      console.log('')
+      console.log(
+        'Cancelled. No files changed.'
+      )
+
+      return
+    }
+  }
+
+  // ==========================================================
+  // ALL MESSAGE MODE
+  // ==========================================================
+
+  else if (
+    mode === '2'
+  ) {
+    selectedMessages =
+      messages
+
+    console.log('')
+
+    console.log(
+      `You are about to repair ${messages.length} recordings.`
+    )
+
+    const confirmation =
+      (
+        await rl.question(
+          `Type REPAIR ALL to process all ${messages.length} messages: `
+        )
+      ).trim()
+
+    if (
+      confirmation !==
+      'REPAIR ALL'
+    ) {
+      console.log('')
+      console.log(
+        'Cancelled. No files changed.'
+      )
+
+      return
+    }
+  }
+
+  // ==========================================================
+  // CANCEL
+  // ==========================================================
+
+  else {
+    console.log('')
+    console.log(
+      'Cancelled. No files changed.'
     )
 
     return
   }
 
-  console.log('')
+  // ==========================================================
+  // TEMP DIRECTORY
+  // ==========================================================
 
-  let repaired = 0
-  let failed = 0
-
-  const failures = []
-
-  for (
-    let index = 0;
-    index < messages.length;
-    index += 1
-  ) {
-    const message =
-      messages[index]
-
-    console.log(
-      '----------------------------------------'
-    )
-
-    console.log(
-      `[${index + 1}/${messages.length}] Message ${message.message_number}`
-    )
-
-    console.log(
-      message.file_name ||
-        'recording'
-    )
-
-    try {
-      const result =
-        await repairMessage(
-          message,
-          token
-        )
-
-      repaired += 1
-
-      console.log(
-        `SUCCESS - ${formatBytes(
-          result.newSize
-        )}`
-      )
-    } catch (error) {
-      failed += 1
-
-      failures.push({
-        message:
-          message.message_number,
-
-        file:
-          message.file_name,
-
-        error:
-          error.message,
-      })
-
-      console.error(
-        `FAILED - ${error.message}`
-      )
-    }
-
-    console.log('')
-  }
-
-  console.log('')
-  console.log(
-    '========================================'
-  )
-
-  console.log(
-    ' BULK REPAIR COMPLETE'
-  )
-
-  console.log(
-    '========================================'
-  )
-
-  console.log('')
-
-  console.log(
-    `Successful: ${repaired}`
-  )
-
-  console.log(
-    `Failed: ${failed}`
-  )
-
-  if (failures.length) {
-    console.log('')
-    console.log(
-      'Failures:'
-    )
-
-    failures.forEach(
-      (failure) => {
-        console.log(
-          `Message ${failure.message}: ${failure.file || ''}`
-        )
-
-        console.log(
-          `  ${failure.error}`
-        )
-      }
-    )
-  }
-}
-
-// ============================================================
-// REPAIR ONE MESSAGE
-// ============================================================
-
-async function repairMessage(
-  message,
-  token
-) {
-  const tempDirectory =
+  const tempDir =
     fs.mkdtempSync(
       path.join(
         os.tmpdir(),
@@ -631,578 +1051,159 @@ async function repairMessage(
       )
     )
 
-  const originalPath =
-    path.join(
-      tempDirectory,
-      'original-audio'
-    )
+  const failures = []
 
-  const repairedPath =
-    path.join(
-      tempDirectory,
-      'repaired.mp3'
-    )
+  let repairedCount = 0
+
+  console.log('')
+  console.log(
+    'Starting repair...'
+  )
+  console.log('')
+
+  // ==========================================================
+  // REPAIR SELECTED MESSAGES
+  // ==========================================================
 
   try {
-    console.log(
-      'Downloading original...'
-    )
-
-    const audioResponse =
-      await fetch(
-        `${API_URL}/audio/${encodeURIComponent(
-          message.id
-        )}?download=1`,
-        {
-          headers: {
-            Authorization:
-              `Bearer ${token}`,
-          },
-        }
-      )
-
-    if (!audioResponse.ok) {
-      const text =
-        await audioResponse.text()
-
-      throw new Error(
-        `Download failed (${audioResponse.status}): ${text}`
-      )
-    }
-
-    const originalBuffer =
-      Buffer.from(
-        await audioResponse.arrayBuffer()
-      )
-
-    if (!originalBuffer.length) {
-      throw new Error(
-        'Downloaded recording is empty.'
-      )
-    }
-
-    fs.writeFileSync(
-      originalPath,
-      originalBuffer
-    )
-
-    console.log(
-      `Downloaded ${formatBytes(
-        originalBuffer.length
-      )}`
-    )
-
-    console.log(
-      'Converting to true MP3...'
-    )
-
-    await convertToMp3(
-      originalPath,
-      repairedPath
-    )
-
-    if (
-      !fs.existsSync(
-        repairedPath
-      )
+    for (
+      let index = 0;
+      index <
+      selectedMessages.length;
+      index += 1
     ) {
-      throw new Error(
-        'FFmpeg did not create the repaired file.'
-      )
-    }
+      const message =
+        selectedMessages[
+          index
+        ]
 
-    const repairedBuffer =
-      fs.readFileSync(
-        repairedPath
-      )
+      const label =
+        message
+          .custom_label ||
+        message
+          .file_name ||
+        `Message ${message.message_number}`
 
-    if (!repairedBuffer.length) {
-      throw new Error(
-        'Converted MP3 is empty.'
-      )
-    }
-
-    console.log(
-      `Converted ${formatBytes(
-        repairedBuffer.length
-      )}`
-    )
-
-    const duration =
-      await getDuration(
-        repairedPath
+      process.stdout.write(
+        `[${index + 1}/${selectedMessages.length}] ${label} ... `
       )
 
-    console.log(
-      `Duration: ${duration.toFixed(
-        2
-      )} seconds`
-    )
+      try {
+        const result =
+          await repairMessage(
+            token,
+            message,
+            tempDir
+          )
 
-    console.log(
-      'Uploading repaired MP3...'
-    )
+        repairedCount += 1
 
-    const repairResponse =
-      await fetch(
-        `${API_URL}/repair/message/${encodeURIComponent(
-          message.id
-        )}`,
-        {
-          method:
-            'POST',
+        const oldKb =
+          Math.round(
+            result
+              .originalSize /
+            1024
+          )
 
-          headers: {
-            Authorization:
-              `Bearer ${token}`,
+        const newKb =
+          Math.round(
+            result.newSize /
+            1024
+          )
 
-            'Content-Type':
-              'audio/mpeg',
+        const durationText =
+          result.duration
+            ? `${result.duration}s`
+            : 'duration unknown'
 
-            'X-File-Size':
-              String(
-                repairedBuffer.length
-              ),
+        console.log(
+          `OK  ${durationText}  ${oldKb}KB -> ${newKb}KB`
+        )
+      } catch (error) {
+        const errorMessage =
+          error?.message ||
+          String(error)
 
-            'X-Duration':
-              String(
-                Math.round(
-                  duration
-                )
-              ),
-          },
+        failures.push({
+          message,
+          error:
+            errorMessage,
+        })
 
-          body:
-            repairedBuffer,
-        }
-      )
-
-    const responseText =
-      await repairResponse.text()
-
-    let responseData = null
-
-    try {
-      responseData =
-        responseText
-          ? JSON.parse(
-              responseText
-            )
-          : {}
-    } catch {
-      responseData = {
-        raw:
-          responseText,
+        console.log(
+          `FAILED: ${errorMessage}`
+        )
       }
-    }
-
-    if (
-      !repairResponse.ok
-    ) {
-      throw new Error(
-        responseData?.error ||
-          responseData?.message ||
-          responseText ||
-          `Repair upload failed (${repairResponse.status})`
-      )
-    }
-
-    console.log(
-      'Repaired recording uploaded.'
-    )
-
-    if (
-      responseData.backup_key
-    ) {
-      console.log(
-        `Backup: ${responseData.backup_key}`
-      )
-    }
-
-    return {
-      originalSize:
-        originalBuffer.length,
-
-      newSize:
-        repairedBuffer.length,
-
-      duration:
-        Math.round(
-          duration
-        ),
-
-      response:
-        responseData,
     }
   } finally {
-    try {
-      fs.rmSync(
-        tempDirectory,
-        {
-          recursive: true,
-          force: true,
-        }
-      )
-    } catch {
-      // Ignore temp cleanup errors.
-    }
-  }
-}
+    // ========================================================
+    // CLEAN TEMP FILES
+    // ========================================================
 
-// ============================================================
-// FFMPEG CONVERSION
-// ============================================================
-
-function convertToMp3(
-  inputFile,
-  outputFile
-) {
-  return new Promise(
-    (
-      resolve,
-      reject
-    ) => {
-      const args = [
-        '-y',
-
-        '-i',
-        inputFile,
-
-        '-vn',
-
-        '-acodec',
-        'libmp3lame',
-
-        '-ar',
-        '44100',
-
-        '-ac',
-        '1',
-
-        '-b:a',
-        '128k',
-
-        outputFile,
-      ]
-
-      const process =
-        spawn(
-          ffmpegPath,
-          args,
-          {
-            stdio: [
-              'ignore',
-              'ignore',
-              'pipe',
-            ],
-          }
-        )
-
-      let errorOutput = ''
-
-      process.stderr.on(
-        'data',
-        (data) => {
-          errorOutput +=
-            data.toString()
-        }
-      )
-
-      process.on(
-        'error',
-        reject
-      )
-
-      process.on(
-        'close',
-        (code) => {
-          if (code === 0) {
-            resolve()
-            return
-          }
-
-          reject(
-            new Error(
-              `FFmpeg conversion failed with code ${code}.\n${errorOutput}`
-            )
-          )
-        }
-      )
-    }
-  )
-}
-
-// ============================================================
-// AUDIO DURATION
-// ============================================================
-
-function getDuration(
-  file
-) {
-  return new Promise(
-    (
-      resolve,
-      reject
-    ) => {
-      const args = [
-        '-i',
-        file,
-        '-f',
-        'null',
-        '-',
-      ]
-
-      const process =
-        spawn(
-          ffmpegPath,
-          args,
-          {
-            stdio: [
-              'ignore',
-              'ignore',
-              'pipe',
-            ],
-          }
-        )
-
-      let output = ''
-
-      process.stderr.on(
-        'data',
-        (data) => {
-          output +=
-            data.toString()
-        }
-      )
-
-      process.on(
-        'error',
-        reject
-      )
-
-      process.on(
-        'close',
-        () => {
-          const matches =
-            [
-              ...output.matchAll(
-                /time=(\d+):(\d+):([\d.]+)/g
-              ),
-            ]
-
-          if (!matches.length) {
-            // Try reading the Duration header.
-
-            const durationMatch =
-              output.match(
-                /Duration:\s*(\d+):(\d+):([\d.]+)/
-              )
-
-            if (
-              !durationMatch
-            ) {
-              resolve(0)
-              return
-            }
-
-            const hours =
-              Number(
-                durationMatch[1]
-              )
-
-            const minutes =
-              Number(
-                durationMatch[2]
-              )
-
-            const seconds =
-              Number(
-                durationMatch[3]
-              )
-
-            resolve(
-              hours * 3600 +
-                minutes * 60 +
-                seconds
-            )
-
-            return
-          }
-
-          const match =
-            matches[
-              matches.length - 1
-            ]
-
-          const hours =
-            Number(
-              match[1]
-            )
-
-          const minutes =
-            Number(
-              match[2]
-            )
-
-          const seconds =
-            Number(
-              match[3]
-            )
-
-          resolve(
-            hours * 3600 +
-              minutes * 60 +
-              seconds
-          )
-        }
-      )
-    }
-  )
-}
-
-// ============================================================
-// SUPABASE LOGIN
-// ============================================================
-
-async function signIn(
-  email,
-  password
-) {
-  const response =
-    await fetch(
-      `${SUPABASE_URL}/auth/v1/token?grant_type=password`,
+    fs.rmSync(
+      tempDir,
       {
-        method:
-          'POST',
-
-        headers: {
-          apikey:
-            SUPABASE_ANON_KEY,
-
-          'Content-Type':
-            'application/json',
-        },
-
-        body:
-          JSON.stringify({
-            email,
-            password,
-          }),
+        recursive: true,
+        force: true,
       }
     )
 
-  const text =
-    await response.text()
-
-  let data = null
-
-  try {
-    data =
-      JSON.parse(text)
-  } catch {
-    data = null
+    await supabase.auth
+      .signOut()
+      .catch(
+        () => {}
+      )
   }
 
-  if (!response.ok) {
-    throw new Error(
-      data?.error_description ||
-        data?.msg ||
-        data?.message ||
-        `Login failed (${response.status})`
-    )
-  }
+  // ==========================================================
+  // RESULTS
+  // ==========================================================
+
+  console.log('')
+  console.log(
+    '============================================'
+  )
+
+  console.log(
+    ' REPAIR COMPLETE'
+  )
+
+  console.log(
+    '============================================'
+  )
+
+  console.log(
+    `Repaired: ${repairedCount}/${selectedMessages.length}`
+  )
 
   if (
-    !data?.access_token
+    failures.length
   ) {
-    throw new Error(
-      'Supabase did not return an access token.'
-    )
-  }
-
-  return data.access_token
-}
-
-// ============================================================
-// API FETCH
-// ============================================================
-
-async function apiFetch(
-  endpoint,
-  token,
-  options = {}
-) {
-  const response =
-    await fetch(
-      `${API_URL}${endpoint}`,
-      {
-        ...options,
-
-        headers: {
-          Authorization:
-            `Bearer ${token}`,
-
-          ...(options.headers ||
-            {}),
-        },
-      }
+    console.log(
+      `Failed: ${failures.length}`
     )
 
-  const text =
-    await response.text()
+    console.log('')
 
-  let data = null
-
-  try {
-    data =
-      text
-        ? JSON.parse(text)
-        : {}
-  } catch {
-    data = {
-      raw: text,
+    for (
+      const item of
+      failures
+    ) {
+      console.log(
+        `- Message ${item.message.message_number}: ${item.error}`
+      )
     }
-  }
-
-  if (!response.ok) {
-    throw new Error(
-      data?.error ||
-        data?.message ||
-        text ||
-        `API request failed (${response.status})`
+  } else {
+    console.log(
+      'All selected recordings repaired successfully.'
     )
   }
 
-  return data
-}
+  console.log(
+    '============================================'
+  )
 
-// ============================================================
-// FORMAT BYTES
-// ============================================================
-
-function formatBytes(
-  bytes
-) {
-  const value =
-    Number(bytes) || 0
-
-  if (value < 1024) {
-    return `${value} B`
-  }
-
-  if (
-    value <
-    1024 * 1024
-  ) {
-    return `${(
-      value / 1024
-    ).toFixed(1)} KB`
-  }
-
-  return `${(
-    value /
-    (1024 * 1024)
-  ).toFixed(2)} MB`
+  console.log('')
 }
 
 // ============================================================
@@ -1214,21 +1215,23 @@ main()
     (error) => {
       console.error('')
       console.error(
-        '========================================'
+        '============================================'
       )
 
       console.error(
-        ' ERROR'
+        ' REPAIR TOOL STOPPED'
       )
 
       console.error(
-        '========================================'
+        '============================================'
+      )
+
+      console.error(
+        error?.message ||
+        error
       )
 
       console.error('')
-      console.error(
-        error.message
-      )
 
       process.exitCode = 1
     }
