@@ -12,6 +12,8 @@ function Guestbook({ slug }) {
   const [audioUrls, setAudioUrls] = useState({})
   const [audioLoadingId, setAudioLoadingId] = useState(null)
   const [downloadAllStatus, setDownloadAllStatus] = useState('')
+  const [continuousPlay, setContinuousPlay] = useState(false)
+  const [continuousIndex, setContinuousIndex] = useState(-1)
 
   useEffect(() => {
     loadGallery()
@@ -63,6 +65,50 @@ function Guestbook({ slug }) {
     }
   }
 
+  async function getOrLoadAudioUrl(message) {
+    if (audioUrls[message.id]) {
+      return audioUrls[message.id]
+    }
+
+    const response = await fetch(
+      `${API_URL}/public/audio/${encodeURIComponent(
+        message.id
+      )}`
+    )
+
+    if (!response.ok) {
+      let messageText = 'Unable to load recording.'
+
+      try {
+        const data = await response.json()
+
+        messageText =
+          data.error ||
+          data.message ||
+          messageText
+      } catch {
+        // Binary response.
+      }
+
+      throw new Error(messageText)
+    }
+
+    const blob = await response.blob()
+
+    if (!blob.size) {
+      throw new Error('The audio file is empty.')
+    }
+
+    const objectUrl = URL.createObjectURL(blob)
+
+    setAudioUrls((current) => ({
+      ...current,
+      [message.id]: objectUrl,
+    }))
+
+    return objectUrl
+  }
+
   async function loadAudio(message) {
     if (audioUrls[message.id]) {
       const player =
@@ -74,7 +120,7 @@ function Guestbook({ slug }) {
         try {
           await player.play()
         } catch {
-          // User can press native play button.
+          // User can press the native play button.
         }
       }
 
@@ -84,45 +130,7 @@ function Guestbook({ slug }) {
     setAudioLoadingId(message.id)
 
     try {
-      const response = await fetch(
-        `${API_URL}/public/audio/${encodeURIComponent(
-          message.id
-        )}`
-      )
-
-      if (!response.ok) {
-        let messageText =
-          'Unable to load recording.'
-
-        try {
-          const data = await response.json()
-
-          messageText =
-            data.error ||
-            data.message ||
-            messageText
-        } catch {
-          // Response may be binary.
-        }
-
-        throw new Error(messageText)
-      }
-
-      const blob = await response.blob()
-
-      if (!blob.size) {
-        throw new Error(
-          'The audio file is empty.'
-        )
-      }
-
-      const objectUrl =
-        URL.createObjectURL(blob)
-
-      setAudioUrls((current) => ({
-        ...current,
-        [message.id]: objectUrl,
-      }))
+      await getOrLoadAudioUrl(message)
 
       setTimeout(async () => {
         const player =
@@ -134,7 +142,7 @@ function Guestbook({ slug }) {
           try {
             await player.play()
           } catch {
-            // Browser may require user to press play again.
+            // Browser may require a second user click.
           }
         }
       }, 100)
@@ -148,6 +156,109 @@ function Guestbook({ slug }) {
     } finally {
       setAudioLoadingId(null)
     }
+  }
+
+  async function playContinuousMessage(index) {
+    if (
+      index < 0 ||
+      index >= messages.length
+    ) {
+      setContinuousPlay(false)
+      setContinuousIndex(-1)
+      return
+    }
+
+    const message = messages[index]
+
+    try {
+      setContinuousPlay(true)
+      setContinuousIndex(index)
+      setAudioLoadingId(message.id)
+
+      await getOrLoadAudioUrl(message)
+
+      setTimeout(async () => {
+        const player =
+          document.getElementById(
+            `public-audio-${message.id}`
+          )
+
+        if (!player) {
+          return
+        }
+
+        try {
+          await player.play()
+
+          document
+            .getElementById(
+              `public-message-card-${message.id}`
+            )
+            ?.scrollIntoView({
+              behavior: 'smooth',
+              block: 'center',
+            })
+        } catch {
+          setContinuousPlay(false)
+          setContinuousIndex(-1)
+
+          alert(
+            'Your browser blocked automatic playback. Press Play All again.'
+          )
+        }
+      }, 100)
+    } catch (error) {
+      console.error(
+        'Continuous playback error:',
+        error
+      )
+
+      setContinuousPlay(false)
+      setContinuousIndex(-1)
+      alert(error.message)
+    } finally {
+      setAudioLoadingId(null)
+    }
+  }
+
+  function startContinuousPlay() {
+    if (!messages.length) {
+      return
+    }
+
+    if (continuousPlay) {
+      stopContinuousPlay()
+      return
+    }
+
+    playContinuousMessage(0)
+  }
+
+  function stopContinuousPlay() {
+    setContinuousPlay(false)
+    setContinuousIndex(-1)
+
+    document
+      .querySelectorAll('.public-audio-player')
+      .forEach((player) => {
+        player.pause()
+      })
+  }
+
+  function handleContinuousEnded(index) {
+    if (!continuousPlay) {
+      return
+    }
+
+    const nextIndex = index + 1
+
+    if (nextIndex >= messages.length) {
+      setContinuousPlay(false)
+      setContinuousIndex(-1)
+      return
+    }
+
+    playContinuousMessage(nextIndex)
   }
 
   async function downloadMessage(message) {
@@ -363,6 +474,18 @@ function Guestbook({ slug }) {
             <button
               type="button"
               className="public-download-button"
+              onClick={startContinuousPlay}
+            >
+              {continuousPlay
+                ? '■ Stop Continuous Play'
+                : '▶ Play All'}
+            </button>
+          )}
+
+          {messages.length > 0 && (
+            <button
+              type="button"
+              className="public-download-button"
               onClick={downloadAllMessages}
               disabled={Boolean(downloadAllStatus)}
             >
@@ -389,10 +512,15 @@ function Guestbook({ slug }) {
         ) : (
           <div className="public-message-list">
 
-            {messages.map((message) => (
+            {messages.map((message, index) => (
 
               <article
-                className="public-message-card"
+                id={`public-message-card-${message.id}`}
+                className={
+                  continuousIndex === index
+                    ? 'public-message-card public-message-card-playing'
+                    : 'public-message-card'
+                }
                 key={message.id}
               >
 
@@ -468,6 +596,9 @@ function Guestbook({ slug }) {
                       }
                       controls
                       preload="metadata"
+                      onEnded={() =>
+                        handleContinuousEnded(index)
+                      }
                     />
 
                   )}
