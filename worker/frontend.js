@@ -3,17 +3,16 @@ const API_URL =
 
 export default {
   async fetch(request, env) {
-    const url =
-      new URL(request.url)
+    const url = new URL(request.url)
 
     const guestbookMatch =
       url.pathname.match(
         /^\/guestbook\/([^/]+)\/?$/
       )
 
-    // --------------------------------------------------------
+    // ========================================================
     // NORMAL FRONTEND REQUESTS
-    // --------------------------------------------------------
+    // ========================================================
 
     if (!guestbookMatch) {
       return env.ASSETS.fetch(request)
@@ -24,9 +23,21 @@ export default {
         guestbookMatch[1]
       )
 
-    // --------------------------------------------------------
+    // ========================================================
+    // IMPORTANT:
+    // LOAD THE SPA USING THE ORIGINAL REQUEST
+    //
+    // Do NOT request /index.html directly.
+    // Cloudflare will use the SPA fallback while keeping
+    // /guestbook/:slug in the browser address bar.
+    // ========================================================
+
+    const assetResponse =
+      await env.ASSETS.fetch(request)
+
+    // ========================================================
     // GET PUBLIC EVENT INFORMATION
-    // --------------------------------------------------------
+    // ========================================================
 
     let event = null
     let messages = []
@@ -48,9 +59,7 @@ export default {
           data
 
         messages =
-          Array.isArray(
-            data.messages
-          )
+          Array.isArray(data.messages)
             ? data.messages
             : []
       }
@@ -61,36 +70,15 @@ export default {
       )
     }
 
-    // --------------------------------------------------------
-    // LOAD THE REACT SPA HTML
-    // --------------------------------------------------------
-
-    const indexUrl =
-      new URL(
-        '/index.html',
-        request.url
-      )
-
-    const indexRequest =
-      new Request(
-        indexUrl,
-        request
-      )
-
-    const response =
-      await env.ASSETS.fetch(
-        indexRequest
-      )
-
-    // If we could not find the event,
-    // just return the normal React application.
+    // If event metadata failed,
+    // still return the normal working gallery.
     if (!event) {
-      return response
+      return assetResponse
     }
 
-    // --------------------------------------------------------
-    // BUILD SOCIAL METADATA
-    // --------------------------------------------------------
+    // ========================================================
+    // SOCIAL METADATA
+    // ========================================================
 
     const eventName =
       event.name ||
@@ -102,12 +90,18 @@ export default {
     const messageCount =
       messages.length
 
-    const description =
-      messageCount === 1
-        ? `Listen to an audio message from ${eventName}'s celebration.`
-        : messageCount > 1
-          ? `Listen to ${messageCount} audio messages from ${eventName}'s celebration.`
-          : `Listen to audio messages from ${eventName}'s celebration.`
+    let description
+
+    if (messageCount === 1) {
+      description =
+        `Listen to an audio message from ${eventName}'s celebration.`
+    } else if (messageCount > 1) {
+      description =
+        `Listen to ${messageCount} audio messages from ${eventName}'s celebration.`
+    } else {
+      description =
+        `Listen to audio messages from ${eventName}'s celebration.`
+    }
 
     const canonicalUrl =
       `${url.origin}/guestbook/${encodeURIComponent(
@@ -117,9 +111,9 @@ export default {
     const previewImage =
       `${url.origin}/gallery-preview.jpg`
 
-    // --------------------------------------------------------
-    // ADD OPEN GRAPH / SOCIAL TAGS
-    // --------------------------------------------------------
+    // ========================================================
+    // INJECT OPEN GRAPH METADATA
+    // ========================================================
 
     return new HTMLRewriter()
 
@@ -140,75 +134,47 @@ export default {
           element(element) {
             element.append(
               `
-<meta
-  name="description"
-  content="${escapeHtml(description)}"
->
+<meta name="description"
+      content="${escapeHtml(description)}">
 
-<meta
-  property="og:title"
-  content="${escapeHtml(title)}"
->
+<meta property="og:title"
+      content="${escapeHtml(title)}">
 
-<meta
-  property="og:description"
-  content="${escapeHtml(description)}"
->
+<meta property="og:description"
+      content="${escapeHtml(description)}">
 
-<meta
-  property="og:image"
-  content="${escapeHtml(previewImage)}"
->
+<meta property="og:image"
+      content="${escapeHtml(previewImage)}">
 
-<meta
-  property="og:image:width"
-  content="1200"
->
+<meta property="og:image:width"
+      content="1200">
 
-<meta
-  property="og:image:height"
-  content="630"
->
+<meta property="og:image:height"
+      content="630">
 
-<meta
-  property="og:url"
-  content="${escapeHtml(canonicalUrl)}"
->
+<meta property="og:url"
+      content="${escapeHtml(canonicalUrl)}">
 
-<meta
-  property="og:type"
-  content="website"
->
+<meta property="og:type"
+      content="website">
 
-<meta
-  property="og:site_name"
-  content="SnapBooth Audio Guestbook"
->
+<meta property="og:site_name"
+      content="SnapBooth Audio Guestbook">
 
-<meta
-  name="twitter:card"
-  content="summary_large_image"
->
+<meta name="twitter:card"
+      content="summary_large_image">
 
-<meta
-  name="twitter:title"
-  content="${escapeHtml(title)}"
->
+<meta name="twitter:title"
+      content="${escapeHtml(title)}">
 
-<meta
-  name="twitter:description"
-  content="${escapeHtml(description)}"
->
+<meta name="twitter:description"
+      content="${escapeHtml(description)}">
 
-<meta
-  name="twitter:image"
-  content="${escapeHtml(previewImage)}"
->
+<meta name="twitter:image"
+      content="${escapeHtml(previewImage)}">
 
-<link
-  rel="canonical"
-  href="${escapeHtml(canonicalUrl)}"
->
+<link rel="canonical"
+      href="${escapeHtml(canonicalUrl)}">
               `,
               {
                 html: true,
@@ -218,30 +184,18 @@ export default {
         }
       )
 
-      .transform(response)
+      .transform(assetResponse)
   },
 }
 
 // ============================================================
-// HTML ESCAPE
+// ESCAPE HTML
 // ============================================================
 
 function escapeHtml(value) {
   return String(value)
-    .replace(
-      /&/g,
-      '&amp;'
-    )
-    .replace(
-      /"/g,
-      '&quot;'
-    )
-    .replace(
-      /</g,
-      '&lt;'
-    )
-    .replace(
-      />/g,
-      '&gt;'
-    )
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
 }
