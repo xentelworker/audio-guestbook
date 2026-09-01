@@ -109,8 +109,25 @@ function Guestbook({ slug }) {
     return objectUrl
   }
 
+  function stopOtherAudioPlayers(activeMessageId = null) {
+    document
+      .querySelectorAll('.public-audio-player')
+      .forEach((player) => {
+        const activeId =
+          activeMessageId
+            ? `public-audio-${activeMessageId}`
+            : null
+
+        if (!activeId || player.id !== activeId) {
+          player.pause()
+        }
+      })
+  }
+
   async function loadAudio(message) {
     if (audioUrls[message.id]) {
+      stopOtherAudioPlayers(message.id)
+
       const player =
         document.getElementById(
           `public-audio-${message.id}`
@@ -125,6 +142,13 @@ function Guestbook({ slug }) {
       }
 
       return
+    }
+
+    stopOtherAudioPlayers(message.id)
+
+    if (continuousPlay) {
+      setContinuousPlay(false)
+      setContinuousIndex(-1)
     }
 
     setAudioLoadingId(message.id)
@@ -169,6 +193,8 @@ function Guestbook({ slug }) {
     }
 
     const message = messages[index]
+
+    stopOtherAudioPlayers(message.id)
 
     try {
       setContinuousPlay(true)
@@ -596,6 +622,17 @@ function Guestbook({ slug }) {
                       }
                       controls
                       preload="metadata"
+                      onPlay={() => {
+                        stopOtherAudioPlayers(message.id)
+
+                        if (
+                          continuousPlay &&
+                          continuousIndex !== index
+                        ) {
+                          setContinuousPlay(false)
+                          setContinuousIndex(-1)
+                        }
+                      }}
                       onEnded={() =>
                         handleContinuousEnded(index)
                       }
