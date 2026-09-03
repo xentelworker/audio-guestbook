@@ -1480,16 +1480,26 @@ function corsFor(
       'Origin'
     ) || ''
 
+  const adminOrigins =
+    String(
+      env.ADMIN_ORIGIN || ''
+    )
+      .split(',')
+      .map((value) =>
+        value.trim()
+      )
+      .filter(Boolean)
+
   const allowed = [
-    env.ADMIN_ORIGIN,
+    ...adminOrigins,
     'http://localhost:5173',
     'http://127.0.0.1:5173',
-  ].filter(Boolean)
+  ]
 
   const allowedOrigin =
     allowed.includes(origin)
       ? origin
-      : env.ADMIN_ORIGIN ||
+      : adminOrigins[0] ||
         origin ||
         '*'
 
@@ -1505,6 +1515,9 @@ function corsFor(
 
     'Access-Control-Expose-Headers':
       'Content-Length, Content-Range, Accept-Ranges, Content-Disposition',
+
+    'Vary':
+      'Origin',
   }
 }
 
