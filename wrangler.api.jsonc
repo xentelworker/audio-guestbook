@@ -1,4 +1,5 @@
 {
+  // Cloudflare API Worker deployment configuration.
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "audio-guestbook-api",
   "main": "./worker/audio-guestbook-api-lifecycle.js",
