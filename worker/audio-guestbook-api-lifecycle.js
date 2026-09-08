@@ -107,7 +107,8 @@ export default {
         }
       }
 
-      return baseWorker.fetch(request, env, ctx)
+      const response = await baseWorker.fetch(request, env, ctx)
+      return withNoStore(response)
     }
 
     const publicAudioMatch = url.pathname.match(/^\/public\/audio\/([^/]+)$/)
@@ -237,6 +238,12 @@ export default {
       if ('auto_archive_enabled' in body) {
         await patchEventLifecycle(env, id, {
           auto_archive_enabled: Boolean(body.auto_archive_enabled),
+        })
+      } else if ('archived_at' in body && !body.archived_at) {
+        // Manual unarchive should restore access instead of immediately
+        // auto-archiving an event whose archive date is already in the past.
+        await patchEventLifecycle(env, id, {
+          auto_archive_enabled: false,
         })
       }
 
@@ -421,14 +428,27 @@ function publicJson(body, status, request, env) {
     status,
     headers: {
       'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'no-store',
       ...publicCorsHeaders(request, env),
     },
+  })
+}
+
+function withNoStore(response) {
+  const headers = new Headers(response.headers)
+  headers.set('Cache-Control', 'no-store')
+
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
   })
 }
 
 function json(body, status = 200, sourceHeaders = undefined) {
   const headers = new Headers(sourceHeaders || {})
   headers.set('Content-Type', 'application/json; charset=utf-8')
+  headers.set('Cache-Control', 'no-store')
 
   return new Response(JSON.stringify(body), {
     status,
