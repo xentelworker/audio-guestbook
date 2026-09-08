@@ -16,14 +16,11 @@ export default {
 
       const payload = await baseResponse.json()
       const lifecycleRows = await getLifecycleRows(env)
-      const lifecycleMap = new Map(
-        lifecycleRows.map((row) => [row.id, row])
-      )
 
       await autoArchiveDueEvents(env, lifecycleRows)
 
       const refreshed = await getLifecycleRows(env)
-      const refreshedMap = new Map(
+      const lifecycleMap = new Map(
         refreshed.map((row) => [row.id, row])
       )
 
@@ -32,7 +29,7 @@ export default {
           ...payload,
           events: (payload.events || []).map((event) => ({
             ...event,
-            ...(refreshedMap.get(event.id) || lifecycleMap.get(event.id) || {}),
+            ...(lifecycleMap.get(event.id) || {}),
           })),
         },
         baseResponse.status,
@@ -119,14 +116,55 @@ export default {
       request.method === 'PATCH'
     ) {
       const body = await request.clone().json().catch(() => ({}))
-      const baseResponse = await baseWorker.fetch(request.clone(), env, ctx)
-
-      if (!baseResponse.ok) {
-        return baseResponse
-      }
-
-      const payload = await baseResponse.json()
       const id = decodeURIComponent(eventMatch[1])
+      const baseFields = [
+        'name',
+        'event_date',
+        'description',
+        'archived_at',
+      ]
+      const hasBaseChanges = baseFields.some((key) => key in body)
+
+      let payload
+      let sourceResponse
+
+      if (hasBaseChanges) {
+        sourceResponse = await baseWorker.fetch(request.clone(), env, ctx)
+
+        if (!sourceResponse.ok) {
+          return sourceResponse
+        }
+
+        payload = await sourceResponse.json()
+      } else {
+        const authUrl = new URL('/events', request.url)
+        const authRequest = new Request(authUrl.toString(), {
+          method: 'GET',
+          headers: request.headers,
+        })
+
+        sourceResponse = await baseWorker.fetch(authRequest, env, ctx)
+
+        if (!sourceResponse.ok) {
+          return sourceResponse
+        }
+
+        const authPayload = await sourceResponse.json()
+        const existing = (authPayload.events || []).find((event) => event.id === id)
+
+        if (!existing) {
+          return json(
+            { error: 'Event not found' },
+            404,
+            sourceResponse.headers
+          )
+        }
+
+        payload = {
+          success: true,
+          event: existing,
+        }
+      }
 
       if ('auto_archive_enabled' in body) {
         await patchEventLifecycle(env, id, {
@@ -149,8 +187,8 @@ export default {
 
       return json(
         payload,
-        baseResponse.status,
-        baseResponse.headers
+        200,
+        sourceResponse.headers
       )
     }
 
@@ -209,7 +247,10 @@ async function autoArchiveDueEvents(env, existingRows = null) {
       continue
     }
 
-    const archiveAt = new Date(calculateArchiveAt(row.event_date, true))
+    const archiveAtValue = calculateArchiveAt(row.event_date, true)
+    if (!archiveAtValue) continue
+
+    const archiveAt = new Date(archiveAtValue)
 
     if (Number.isNaN(archiveAt.getTime()) || archiveAt > now) {
       continue
