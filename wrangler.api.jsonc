@@ -1,0 +1,23 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "audio-guestbook-api",
+  "main": "./worker/audio-guestbook-api-lifecycle.js",
+  "compatibility_date": "2026-09-03",
+  "preview_urls": false,
+  "vars": {
+    "ADMIN_ORIGIN": "https://guestbook.snapapp.ca,https://guestbook.snapbooth.workers.dev",
+    "SUPABASE_URL": "https://mjatifnaqbbxrfylflrx.supabase.co"
+  },
+  "r2_buckets": [
+    {
+      "binding": "AUDIO_BUCKET",
+      "bucket_name": "audio-guestbook"
+    }
+  ],
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true
+    }
+  }
+}
