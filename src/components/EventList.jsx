@@ -17,6 +17,7 @@ function addThreeMonths(dateValue) {
 }
 
 function lifecycleText(event) {
+  if (!('auto_archive_enabled' in event)) return 'Lifecycle update pending'
   if (event.archived_at) return 'Archived'
   if (!event.auto_archive_enabled) return 'Auto archive off'
 
@@ -40,6 +41,8 @@ export default function EventList({
   if (!events.length) return <div className="empty-state"><h3>No matching events</h3></div>
 
   async function toggleAutoArchive(event) {
+    if (!('auto_archive_enabled' in event)) return
+
     const effective = {
       ...event,
       ...(overrides[event.id] || {}),
@@ -79,6 +82,7 @@ export default function EventList({
           ...originalEvent,
           ...(overrides[originalEvent.id] || {}),
         }
+        const lifecycleReady = 'auto_archive_enabled' in event
 
         return (
           <div className="event-row operational-event-row" key={event.id}>
@@ -103,14 +107,16 @@ export default function EventList({
               <button
                 type="button"
                 onClick={() => toggleAutoArchive(event)}
-                disabled={savingId === event.id}
+                disabled={!lifecycleReady || savingId === event.id}
                 title="Automatically archive this event three months after its event date"
               >
-                {savingId === event.id
-                  ? 'Saving...'
-                  : event.auto_archive_enabled
-                    ? 'Auto Archive: On'
-                    : 'Auto Archive: Off'}
+                {!lifecycleReady
+                  ? 'Auto Archive: Pending'
+                  : savingId === event.id
+                    ? 'Saving...'
+                    : event.auto_archive_enabled
+                      ? 'Auto Archive: On'
+                      : 'Auto Archive: Off'}
               </button>
               <button type="button" onClick={() => onDuplicate(event)}>Duplicate</button>
               <button type="button" onClick={() => onArchive(event)}>
