@@ -2,27 +2,18 @@ import { useState } from 'react'
 import { formatDate } from '../utils/formatters'
 import { apiJson } from '../services/api'
 
-function addThreeMonths(dateValue) {
-  if (!dateValue) return null
-
-  const [year, month, day] = String(dateValue)
-    .split('-')
-    .map(Number)
-
-  if (!year || !month || !day) return null
-
-  const date = new Date(Date.UTC(year, month - 1, day))
-  date.setUTCMonth(date.getUTCMonth() + 3)
-  return date
-}
-
 function lifecycleText(event) {
   if (!('auto_archive_enabled' in event)) return 'Lifecycle update pending'
   if (event.archived_at) return 'Archived'
   if (!event.auto_archive_enabled) return 'Auto archive off'
 
-  const archiveDate = addThreeMonths(event.event_date)
-  if (!archiveDate) return 'Auto archive on · needs event date'
+  const archiveDate = event.auto_archive_at
+    ? new Date(event.auto_archive_at)
+    : null
+
+  if (!archiveDate || Number.isNaN(archiveDate.getTime())) {
+    return 'Auto archive on · needs event date'
+  }
 
   return `Auto archives ${archiveDate.toLocaleDateString(undefined, {
     year: 'numeric',
@@ -71,7 +62,6 @@ export default function EventList({
     }
 
     const enabled = !Boolean(effective.auto_archive_enabled)
-
     setSavingId(event.id)
 
     try {
@@ -86,6 +76,10 @@ export default function EventList({
         [event.id]: {
           auto_archive_enabled:
             data.event?.auto_archive_enabled ?? enabled,
+          auto_archive_started_at:
+            data.event?.auto_archive_started_at ?? null,
+          auto_archive_at:
+            data.event?.auto_archive_at ?? null,
           archived_at:
             data.event?.archived_at ?? effective.archived_at,
         },
@@ -132,7 +126,7 @@ export default function EventList({
                 type="button"
                 onClick={() => toggleAutoArchive(event)}
                 disabled={!lifecycleReady || savingId === event.id}
-                title="Automatically archive this event three months after its event date"
+                title="Automatically archive this event after its three-month access cycle"
               >
                 {!lifecycleReady
                   ? 'Auto Archive: Pending'
