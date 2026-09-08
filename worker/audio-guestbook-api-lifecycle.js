@@ -30,9 +30,9 @@ export default {
           ...(lifecycleMap.get(event.id) || {}),
         }))
         .sort((a, b) => {
-          const aDate = a.event_date || ''
-          const bDate = b.event_date || ''
-          return bDate.localeCompare(aDate)
+          const aCreated = a.created_at ? new Date(a.created_at).getTime() : 0
+          const bCreated = b.created_at ? new Date(b.created_at).getTime() : 0
+          return bCreated - aCreated
         })
 
       return json(
@@ -275,7 +275,7 @@ export default {
 async function getLifecycleRows(env) {
   return sb(
     env,
-    '/events?select=id,event_date,archived_at,auto_archive_enabled'
+    '/events?select=id,event_date,created_at,archived_at,auto_archive_enabled'
   )
 }
 
@@ -283,7 +283,7 @@ async function getLifecycleById(env, id) {
   const rows = await sb(
     env,
     `/events?id=eq.${encodeURIComponent(id)}` +
-      '&select=id,event_date,archived_at,auto_archive_enabled' +
+      '&select=id,event_date,created_at,archived_at,auto_archive_enabled' +
       '&limit=1'
   )
 
@@ -294,7 +294,7 @@ async function getLifecycleBySlug(env, slug) {
   const rows = await sb(
     env,
     `/events?slug=eq.${encodeURIComponent(slug)}` +
-      '&select=id,event_date,archived_at,auto_archive_enabled' +
+      '&select=id,event_date,created_at,archived_at,auto_archive_enabled' +
       '&limit=1'
   )
 
