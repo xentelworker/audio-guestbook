@@ -4,31 +4,30 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url)
 
-    if (
-      request.method === 'GET' &&
-      url.pathname === '/events'
-    ) {
+    if (request.method === 'GET' && url.pathname === '/events') {
       const baseResponse = await baseWorker.fetch(request.clone(), env, ctx)
-
-      if (!baseResponse.ok) {
-        return baseResponse
-      }
+      if (!baseResponse.ok) return withNoStore(baseResponse)
 
       const payload = await baseResponse.json()
       const lifecycleRows = await getLifecycleRows(env)
-
       await autoArchiveDueEvents(env, lifecycleRows)
 
       const refreshed = await getLifecycleRows(env)
-      const lifecycleMap = new Map(
-        refreshed.map((row) => [row.id, row])
-      )
+      const lifecycleMap = new Map(refreshed.map((row) => [row.id, row]))
 
       const mergedEvents = (payload.events || [])
-        .map((event) => ({
-          ...event,
-          ...(lifecycleMap.get(event.id) || {}),
-        }))
+        .map((event) => {
+          const lifecycle = lifecycleMap.get(event.id) || {}
+          return {
+            ...event,
+            ...lifecycle,
+            auto_archive_at: calculateArchiveAt(
+              lifecycle.event_date ?? event.event_date,
+              lifecycle.auto_archive_enabled,
+              lifecycle.auto_archive_started_at
+            ),
+          }
+        })
         .sort((a, b) => {
           const aCreated = a.created_at ? new Date(a.created_at).getTime() : 0
           const bCreated = b.created_at ? new Date(b.created_at).getTime() : 0
@@ -36,10 +35,7 @@ export default {
         })
 
       return json(
-        {
-          ...payload,
-          events: mergedEvents,
-        },
+        { ...payload, events: mergedEvents },
         baseResponse.status,
         baseResponse.headers
       )
@@ -50,29 +46,23 @@ export default {
       url.pathname.startsWith('/public/event/')
     ) {
       const baseResponse = await baseWorker.fetch(request.clone(), env, ctx)
-
-      if (!baseResponse.ok) {
-        return baseResponse
-      }
+      if (!baseResponse.ok) return withNoStore(baseResponse)
 
       const event = await baseResponse.json()
       const lifecycle = await getLifecycleById(env, event.id)
+      if (lifecycle) await autoArchiveDueEvents(env, [lifecycle])
 
-      if (lifecycle) {
-        await autoArchiveDueEvents(env, [lifecycle])
-      }
-
-      const refreshed = lifecycle
-        ? await getLifecycleById(env, event.id)
-        : null
+      const refreshed = lifecycle ? await getLifecycleById(env, event.id) : null
+      const current = refreshed || lifecycle || {}
 
       return json(
         {
           ...event,
-          ...(refreshed || lifecycle || {}),
+          ...current,
           auto_archive_at: calculateArchiveAt(
             event.event_date,
-            (refreshed || lifecycle)?.auto_archive_enabled
+            current.auto_archive_enabled,
+            current.auto_archive_started_at
           ),
         },
         baseResponse.status,
@@ -82,10 +72,7 @@ export default {
 
     const publicMessagesMatch = url.pathname.match(/^\/public\/messages\/([^/]+)$/)
 
-    if (
-      publicMessagesMatch &&
-      request.method === 'GET'
-    ) {
+    if (publicMessagesMatch && request.method === 'GET') {
       const slug = decodeURIComponent(publicMessagesMatch[1])
       const lifecycle = await getLifecycleBySlug(env, slug)
 
@@ -107,16 +94,12 @@ export default {
         }
       }
 
-      const response = await baseWorker.fetch(request, env, ctx)
-      return withNoStore(response)
+      return withNoStore(await baseWorker.fetch(request, env, ctx))
     }
 
     const publicAudioMatch = url.pathname.match(/^\/public\/audio\/([^/]+)$/)
 
-    if (
-      publicAudioMatch &&
-      request.method === 'GET'
-    ) {
+    if (publicAudioMatch && request.method === 'GET') {
       const messageId = decodeURIComponent(publicAudioMatch[1])
       const lifecycle = await getLifecycleForMessage(env, messageId)
 
@@ -138,18 +121,12 @@ export default {
         }
       }
 
-      return baseWorker.fetch(request, env, ctx)
+      return withNoStore(await baseWorker.fetch(request, env, ctx))
     }
 
-    if (
-      request.method === 'POST' &&
-      url.pathname === '/event'
-    ) {
+    if (request.method === 'POST' && url.pathname === '/event') {
       const baseResponse = await baseWorker.fetch(request.clone(), env, ctx)
-
-      if (!baseResponse.ok) {
-        return baseResponse
-      }
+      if (!baseResponse.ok) return baseResponse
 
       const payload = await baseResponse.json()
       const id = payload.event?.id
@@ -157,6 +134,7 @@ export default {
       if (id) {
         await patchEventLifecycle(env, id, {
           auto_archive_enabled: true,
+          auto_archive_started_at: null,
         })
 
         const lifecycle = await getLifecycleById(env, id)
@@ -166,32 +144,21 @@ export default {
           ...(lifecycle || {}),
           auto_archive_at: calculateArchiveAt(
             payload.event.event_date,
-            lifecycle?.auto_archive_enabled
+            lifecycle?.auto_archive_enabled,
+            lifecycle?.auto_archive_started_at
           ),
         }
       }
 
-      return json(
-        payload,
-        baseResponse.status,
-        baseResponse.headers
-      )
+      return json(payload, baseResponse.status, baseResponse.headers)
     }
 
     const eventMatch = url.pathname.match(/^\/event\/([^/]+)$/)
 
-    if (
-      eventMatch &&
-      request.method === 'PATCH'
-    ) {
+    if (eventMatch && request.method === 'PATCH') {
       const body = await request.clone().json().catch(() => ({}))
       const id = decodeURIComponent(eventMatch[1])
-      const baseFields = [
-        'name',
-        'event_date',
-        'description',
-        'archived_at',
-      ]
+      const baseFields = ['name', 'event_date', 'description', 'archived_at']
       const hasBaseChanges = baseFields.some((key) => key in body)
 
       let payload
@@ -199,11 +166,7 @@ export default {
 
       if (hasBaseChanges) {
         sourceResponse = await baseWorker.fetch(request.clone(), env, ctx)
-
-        if (!sourceResponse.ok) {
-          return sourceResponse
-        }
-
+        if (!sourceResponse.ok) return sourceResponse
         payload = await sourceResponse.json()
       } else {
         const authUrl = new URL('/events', request.url)
@@ -213,37 +176,46 @@ export default {
         })
 
         sourceResponse = await baseWorker.fetch(authRequest, env, ctx)
-
-        if (!sourceResponse.ok) {
-          return sourceResponse
-        }
+        if (!sourceResponse.ok) return sourceResponse
 
         const authPayload = await sourceResponse.json()
         const existing = (authPayload.events || []).find((event) => event.id === id)
 
         if (!existing) {
-          return json(
-            { error: 'Event not found' },
-            404,
-            sourceResponse.headers
-          )
+          return json({ error: 'Event not found' }, 404, sourceResponse.headers)
         }
 
-        payload = {
-          success: true,
-          event: existing,
-        }
+        payload = { success: true, event: existing }
       }
 
       if ('auto_archive_enabled' in body) {
+        const enabled = Boolean(body.auto_archive_enabled)
+        let startedAt = null
+
+        if (enabled) {
+          const current = await getLifecycleById(env, id)
+          const normalArchiveAt = calculateArchiveAt(
+            current?.event_date,
+            true,
+            null
+          )
+
+          if (
+            normalArchiveAt &&
+            new Date(normalArchiveAt).getTime() <= Date.now()
+          ) {
+            startedAt = new Date().toISOString()
+          }
+        }
+
         await patchEventLifecycle(env, id, {
-          auto_archive_enabled: Boolean(body.auto_archive_enabled),
+          auto_archive_enabled: enabled,
+          auto_archive_started_at: enabled ? startedAt : null,
         })
       } else if ('archived_at' in body && !body.archived_at) {
-        // Manual unarchive should restore access instead of immediately
-        // auto-archiving an event whose archive date is already in the past.
         await patchEventLifecycle(env, id, {
           auto_archive_enabled: false,
+          auto_archive_started_at: null,
         })
       }
 
@@ -255,16 +227,13 @@ export default {
           ...(lifecycle || {}),
           auto_archive_at: calculateArchiveAt(
             payload.event.event_date,
-            lifecycle?.auto_archive_enabled
+            lifecycle?.auto_archive_enabled,
+            lifecycle?.auto_archive_started_at
           ),
         }
       }
 
-      return json(
-        payload,
-        200,
-        sourceResponse.headers
-      )
+      return json(payload, 200, sourceResponse.headers)
     }
 
     return baseWorker.fetch(request, env, ctx)
@@ -282,7 +251,7 @@ export default {
 async function getLifecycleRows(env) {
   return sb(
     env,
-    '/events?select=id,event_date,created_at,archived_at,auto_archive_enabled'
+    '/events?select=id,event_date,created_at,archived_at,auto_archive_enabled,auto_archive_started_at'
   )
 }
 
@@ -290,7 +259,7 @@ async function getLifecycleById(env, id) {
   const rows = await sb(
     env,
     `/events?id=eq.${encodeURIComponent(id)}` +
-      '&select=id,event_date,created_at,archived_at,auto_archive_enabled' +
+      '&select=id,event_date,created_at,archived_at,auto_archive_enabled,auto_archive_started_at' +
       '&limit=1'
   )
 
@@ -301,7 +270,7 @@ async function getLifecycleBySlug(env, slug) {
   const rows = await sb(
     env,
     `/events?slug=eq.${encodeURIComponent(slug)}` +
-      '&select=id,event_date,created_at,archived_at,auto_archive_enabled' +
+      '&select=id,event_date,created_at,archived_at,auto_archive_enabled,auto_archive_started_at' +
       '&limit=1'
   )
 
@@ -317,7 +286,6 @@ async function getLifecycleForMessage(env, messageId) {
 
   const eventId = messages[0]?.event_id
   if (!eventId) return null
-
   return getLifecycleById(env, eventId)
 }
 
@@ -338,22 +306,18 @@ async function autoArchiveDueEvents(env, existingRows = null) {
   const now = new Date()
 
   for (const row of rows) {
-    if (
-      !row.auto_archive_enabled ||
-      row.archived_at ||
-      !row.event_date
-    ) {
-      continue
-    }
+    if (!row.auto_archive_enabled || row.archived_at || !row.event_date) continue
 
-    const archiveAtValue = calculateArchiveAt(row.event_date, true)
+    const archiveAtValue = calculateArchiveAt(
+      row.event_date,
+      true,
+      row.auto_archive_started_at
+    )
+
     if (!archiveAtValue) continue
 
     const archiveAt = new Date(archiveAtValue)
-
-    if (Number.isNaN(archiveAt.getTime()) || archiveAt > now) {
-      continue
-    }
+    if (Number.isNaN(archiveAt.getTime()) || archiveAt > now) continue
 
     await patchEventLifecycle(env, row.id, {
       archived_at: now.toISOString(),
@@ -361,17 +325,21 @@ async function autoArchiveDueEvents(env, existingRows = null) {
   }
 }
 
-function calculateArchiveAt(eventDate, enabled) {
+function calculateArchiveAt(eventDate, enabled, startedAt = null) {
   if (!enabled || !eventDate) return null
 
-  const parts = String(eventDate).split('-').map(Number)
-  const [year, month, day] = parts
+  if (startedAt) {
+    const date = new Date(startedAt)
+    if (Number.isNaN(date.getTime())) return null
+    date.setUTCMonth(date.getUTCMonth() + 3)
+    return date.toISOString()
+  }
 
+  const [year, month, day] = String(eventDate).split('-').map(Number)
   if (!year || !month || !day) return null
 
   const date = new Date(Date.UTC(year, month - 1, day))
   date.setUTCMonth(date.getUTCMonth() + 3)
-
   return date.toISOString()
 }
 
