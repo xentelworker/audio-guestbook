@@ -32,6 +32,28 @@ function lifecycleText(event) {
   })}`
 }
 
+function displayOrder(events) {
+  if (!events.length || !events.some((event) => event.created_at)) return events
+
+  const eventDateDescending = [...events].sort((a, b) => {
+    const aDate = a.event_date || ''
+    const bDate = b.event_date || ''
+    return bDate.localeCompare(aDate)
+  })
+
+  const looksLikeDefaultNewestOrder = events.every(
+    (event, index) => event.id === eventDateDescending[index]?.id
+  )
+
+  if (!looksLikeDefaultNewestOrder) return events
+
+  return [...events].sort((a, b) => {
+    const aCreated = a.created_at ? new Date(a.created_at).getTime() : 0
+    const bCreated = b.created_at ? new Date(b.created_at).getTime() : 0
+    return bCreated - aCreated
+  })
+}
+
 export default function EventList({
   events, onOpen, onGallery, onDuplicate, onArchive, onDelete
 }) {
@@ -75,9 +97,11 @@ export default function EventList({
     }
   }
 
+  const orderedEvents = displayOrder(events)
+
   return (
     <div className="events-list">
-      {events.map(originalEvent => {
+      {orderedEvents.map(originalEvent => {
         const event = {
           ...originalEvent,
           ...(overrides[originalEvent.id] || {}),
