@@ -1,3 +1,5 @@
+import './lifecycle.css'
+
 const API_URL = import.meta.env.VITE_AUDIO_API_URL
 
 function formatDate(value) {
