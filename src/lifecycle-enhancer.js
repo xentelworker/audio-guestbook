@@ -28,18 +28,6 @@ function bannerMarkup(event) {
     return ''
   }
 
-  if (event.archived_at) {
-    return `
-      <div class="client-cycle-banner client-cycle-banner-archived">
-        <div class="client-cycle-badge">EVENT CYCLE</div>
-        <div>
-          <strong>This event is archived</strong>
-          <span>Archived ${formatDate(event.archived_at)}. Your audio memories remain available here.</span>
-        </div>
-      </div>
-    `
-  }
-
   if (!event.auto_archive_enabled) {
     return `
       <div class="client-cycle-banner client-cycle-banner-open">
@@ -83,6 +71,34 @@ function bannerMarkup(event) {
   `
 }
 
+function archivedMarkup(event) {
+  return `
+    <div class="public-gallery-container archived-guestbook-container">
+      <div class="archived-guestbook-card">
+        <div class="public-gallery-icon">🎙</div>
+        <div class="client-cycle-badge">EVENT CYCLE</div>
+        <h1>Audio Guestbook Archived</h1>
+        <p class="archived-guestbook-event">${escapeHtml(event.name || 'This event')}</p>
+        <p>
+          The online gallery for this event has reached the end of its access period.
+          The recordings remain safely stored and can be restored by the event provider.
+        </p>
+        ${event.archived_at ? `<p class="archived-guestbook-date">Archived ${formatDate(event.archived_at)}</p>` : ''}
+        <p class="archived-guestbook-contact">Please contact your event provider if you need access restored.</p>
+      </div>
+    </div>
+  `
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;')
+}
+
 async function addLifecycleBanner() {
   const match = window.location.pathname.match(/^\/guestbook\/([^/]+)\/?$/)
 
@@ -98,6 +114,31 @@ async function addLifecycleBanner() {
     if (!response.ok) return
 
     const event = await response.json()
+
+    if (event.archived_at) {
+      const renderArchived = () => {
+        const page = document.querySelector('.public-gallery-page')
+        if (!page) return false
+
+        page.innerHTML = archivedMarkup(event)
+        return true
+      }
+
+      if (renderArchived()) return
+
+      const archivedObserver = new MutationObserver(() => {
+        if (renderArchived()) archivedObserver.disconnect()
+      })
+
+      archivedObserver.observe(document.body, {
+        childList: true,
+        subtree: true,
+      })
+
+      window.setTimeout(() => archivedObserver.disconnect(), 10000)
+      return
+    }
+
     const markup = bannerMarkup(event)
 
     if (!markup) return
