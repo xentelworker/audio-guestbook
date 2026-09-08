@@ -24,13 +24,21 @@ export default {
         refreshed.map((row) => [row.id, row])
       )
 
+      const mergedEvents = (payload.events || [])
+        .map((event) => ({
+          ...event,
+          ...(lifecycleMap.get(event.id) || {}),
+        }))
+        .sort((a, b) => {
+          const aDate = a.event_date || ''
+          const bDate = b.event_date || ''
+          return bDate.localeCompare(aDate)
+        })
+
       return json(
         {
           ...payload,
-          events: (payload.events || []).map((event) => ({
-            ...event,
-            ...(lifecycleMap.get(event.id) || {}),
-          })),
+          events: mergedEvents,
         },
         baseResponse.status,
         baseResponse.headers
@@ -70,6 +78,66 @@ export default {
         baseResponse.status,
         baseResponse.headers
       )
+    }
+
+    const publicMessagesMatch = url.pathname.match(/^\/public\/messages\/([^/]+)$/)
+
+    if (
+      publicMessagesMatch &&
+      request.method === 'GET'
+    ) {
+      const slug = decodeURIComponent(publicMessagesMatch[1])
+      const lifecycle = await getLifecycleBySlug(env, slug)
+
+      if (lifecycle) {
+        await autoArchiveDueEvents(env, [lifecycle])
+        const refreshed = await getLifecycleById(env, lifecycle.id)
+
+        if (refreshed?.archived_at) {
+          return publicJson(
+            {
+              error: 'This audio guestbook has been archived.',
+              archived: true,
+              archived_at: refreshed.archived_at,
+            },
+            410,
+            request,
+            env
+          )
+        }
+      }
+
+      return baseWorker.fetch(request, env, ctx)
+    }
+
+    const publicAudioMatch = url.pathname.match(/^\/public\/audio\/([^/]+)$/)
+
+    if (
+      publicAudioMatch &&
+      request.method === 'GET'
+    ) {
+      const messageId = decodeURIComponent(publicAudioMatch[1])
+      const lifecycle = await getLifecycleForMessage(env, messageId)
+
+      if (lifecycle) {
+        await autoArchiveDueEvents(env, [lifecycle])
+        const refreshed = await getLifecycleById(env, lifecycle.id)
+
+        if (refreshed?.archived_at) {
+          return publicJson(
+            {
+              error: 'This audio guestbook has been archived.',
+              archived: true,
+              archived_at: refreshed.archived_at,
+            },
+            410,
+            request,
+            env
+          )
+        }
+      }
+
+      return baseWorker.fetch(request, env, ctx)
     }
 
     if (
@@ -222,6 +290,30 @@ async function getLifecycleById(env, id) {
   return rows[0] || null
 }
 
+async function getLifecycleBySlug(env, slug) {
+  const rows = await sb(
+    env,
+    `/events?slug=eq.${encodeURIComponent(slug)}` +
+      '&select=id,event_date,archived_at,auto_archive_enabled' +
+      '&limit=1'
+  )
+
+  return rows[0] || null
+}
+
+async function getLifecycleForMessage(env, messageId) {
+  const messages = await sb(
+    env,
+    `/messages?id=eq.${encodeURIComponent(messageId)}` +
+      '&select=event_id&limit=1'
+  )
+
+  const eventId = messages[0]?.event_id
+  if (!eventId) return null
+
+  return getLifecycleById(env, eventId)
+}
+
 async function patchEventLifecycle(env, id, values) {
   return sb(
     env,
@@ -302,6 +394,36 @@ function preferHeaders(env) {
     'Content-Type': 'application/json',
     Prefer: 'return=representation',
   }
+}
+
+function publicCorsHeaders(request, env) {
+  const origin = request.headers.get('Origin') || ''
+  const allowed = String(env.ADMIN_ORIGIN || '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean)
+
+  if (origin && allowed.includes(origin)) {
+    return {
+      'Access-Control-Allow-Origin': origin,
+      Vary: 'Origin',
+    }
+  }
+
+  return {
+    'Access-Control-Allow-Origin': allowed[0] || '*',
+    Vary: 'Origin',
+  }
+}
+
+function publicJson(body, status, request, env) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+      ...publicCorsHeaders(request, env),
+    },
+  })
 }
 
 function json(body, status = 200, sourceHeaders = undefined) {
