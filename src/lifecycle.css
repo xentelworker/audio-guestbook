@@ -58,10 +58,61 @@
   background: rgba(245, 247, 241, 0.96);
 }
 
+.archived-guestbook-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 70vh;
+}
+
+.archived-guestbook-card {
+  width: min(100%, 680px);
+  margin: 2rem auto;
+  padding: 2.5rem 2rem;
+  text-align: center;
+  border: 1px solid rgba(166, 132, 74, 0.28);
+  border-radius: 24px;
+  background: rgba(247, 243, 233, 0.98);
+  box-shadow: 0 18px 44px rgba(49, 65, 54, 0.08);
+  color: #2f4036;
+}
+
+.archived-guestbook-card .client-cycle-badge {
+  display: inline-block;
+  margin: 0.9rem 0 0.65rem;
+  background: #746b5c;
+}
+
+.archived-guestbook-card h1 {
+  margin: 0.4rem 0 0.75rem;
+}
+
+.archived-guestbook-card p {
+  max-width: 540px;
+  margin: 0.65rem auto;
+  line-height: 1.6;
+}
+
+.archived-guestbook-event {
+  font-weight: 700;
+  font-size: 1.08rem;
+}
+
+.archived-guestbook-date,
+.archived-guestbook-contact {
+  font-size: 0.92rem;
+  opacity: 0.78;
+}
+
 @media (max-width: 640px) {
   .client-cycle-banner {
     align-items: flex-start;
     flex-direction: column;
     gap: 0.65rem;
+  }
+
+  .archived-guestbook-card {
+    margin: 1rem;
+    padding: 2rem 1.25rem;
   }
 }
