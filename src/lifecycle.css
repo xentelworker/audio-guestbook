@@ -1,0 +1,67 @@
+.event-lifecycle-summary {
+  display: block;
+  margin-top: 0.35rem;
+  font-size: 0.82rem;
+  opacity: 0.78;
+}
+
+.client-cycle-banner {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin: 1rem 0 1.25rem;
+  padding: 1rem 1.1rem;
+  border: 1px solid rgba(166, 132, 74, 0.28);
+  border-radius: 16px;
+  background: rgba(247, 243, 233, 0.96);
+  box-shadow: 0 10px 24px rgba(49, 65, 54, 0.06);
+  color: #2f4036;
+}
+
+.client-cycle-banner strong,
+.client-cycle-banner span {
+  display: block;
+}
+
+.client-cycle-banner strong {
+  margin-bottom: 0.2rem;
+  font-size: 0.98rem;
+}
+
+.client-cycle-banner span {
+  font-size: 0.88rem;
+  line-height: 1.45;
+  opacity: 0.82;
+}
+
+.client-cycle-badge {
+  flex: 0 0 auto;
+  padding: 0.38rem 0.58rem;
+  border-radius: 999px;
+  background: #657b68;
+  color: #fff;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+}
+
+.client-cycle-banner-archived {
+  background: rgba(242, 238, 229, 0.96);
+  border-color: rgba(126, 113, 91, 0.3);
+}
+
+.client-cycle-banner-archived .client-cycle-badge {
+  background: #746b5c;
+}
+
+.client-cycle-banner-open {
+  background: rgba(245, 247, 241, 0.96);
+}
+
+@media (max-width: 640px) {
+  .client-cycle-banner {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 0.65rem;
+  }
+}
