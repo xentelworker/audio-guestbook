@@ -1,33 +1,39 @@
 /* Mobile-specific public gallery improvements. */
 @media (max-width: 760px) {
   /*
-   * On desktop the Download button belongs in the message heading.
-   * On mobile, flatten that heading into the message column so playback
-   * can be presented before the secondary Download action.
+   * Keep the normal React/DOM structure intact, but reserve space at the
+   * bottom of each message for Download. This avoids Safari's inconsistent
+   * handling of display: contents + flex order and guarantees playback is
+   * visually presented before Download on mobile.
    */
   .public-message-main {
+    position: relative;
     display: flex;
     flex-direction: column;
+    padding-bottom: 64px;
   }
 
   .public-message-heading {
-    display: contents;
-  }
-
-  .public-message-heading > div {
-    order: 1;
+    display: flex;
+    flex-direction: column;
     margin-bottom: 14px;
   }
 
-  .public-message-main > .public-download-button,
-  .public-message-main > .public-audio-player {
-    order: 2;
+  .public-message-heading > div {
     width: 100%;
   }
 
   .public-message-heading > .public-download-button {
-    order: 3;
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
     width: 100%;
-    margin-top: 10px;
+    margin: 0;
+  }
+
+  .public-message-main > .public-download-button,
+  .public-message-main > .public-audio-player {
+    width: 100%;
   }
 }
