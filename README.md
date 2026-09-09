@@ -1,4 +1,4 @@
-# Audio Guestbook
+# Audio Guestbook Web Portal
 
 A production web application for managing and sharing pre-recorded audio guestbook messages for events.
 
