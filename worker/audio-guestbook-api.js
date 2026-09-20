@@ -806,6 +806,239 @@ export default {
       }
 
       // ======================================================
+      // AUDIO REPAIR
+      // ======================================================
+
+      // Lightweight authenticated capability check used by the
+      // local repair utility before it downloads/converts files.
+      if (
+        request.method === 'GET' &&
+        url.pathname === '/repair/status'
+      ) {
+        return json(
+          {
+            ok: true,
+            repair: true,
+            version: 1,
+          },
+          200,
+          corsHeaders
+        )
+      }
+
+      const repairMatch =
+        url.pathname.match(
+          /^\/repair\/message\/([^/]+)$/
+        )
+
+      if (
+        repairMatch &&
+        request.method === 'POST'
+      ) {
+        const id =
+          decodeURIComponent(
+            repairMatch[1]
+          )
+
+        const message = (
+          await sb(
+            env,
+            `/messages?id=eq.${enc(id)}` +
+              `&deleted_at=is.null` +
+              `&select=id,event_id,message_number,file_path,file_name,duration,file_size` +
+              `&limit=1`
+          )
+        )[0]
+
+        if (!message) {
+          return json(
+            { error: 'Message not found' },
+            404,
+            corsHeaders
+          )
+        }
+
+        if (!message.file_path) {
+          return json(
+            { error: 'Message has no R2 file path' },
+            409,
+            corsHeaders
+          )
+        }
+
+        const original =
+          await env.AUDIO_BUCKET.get(
+            message.file_path
+          )
+
+        if (!original) {
+          return json(
+            {
+              error:
+                'Original audio file not found in R2',
+            },
+            404,
+            corsHeaders
+          )
+        }
+
+        const repairedBytes =
+          await request.arrayBuffer()
+
+        if (!repairedBytes.byteLength) {
+          return json(
+            { error: 'Repaired audio file is empty' },
+            400,
+            corsHeaders
+          )
+        }
+
+        const originalBytes =
+          await original.arrayBuffer()
+
+        const date =
+          new Date()
+            .toISOString()
+            .slice(0, 10)
+
+        const backupKey =
+          `repair-backups/${date}/` +
+          `${crypto.randomUUID()}-` +
+          `${safeObjectName(
+            message.file_name ||
+            `message-${message.message_number}.mp3`
+          )}`
+
+        // Back up the exact original bytes before replacing them.
+        await env.AUDIO_BUCKET.put(
+          backupKey,
+          originalBytes,
+          {
+            httpMetadata:
+              original.httpMetadata,
+            customMetadata: {
+              original_path:
+                message.file_path,
+              message_id:
+                message.id,
+            },
+          }
+        )
+
+        const duration =
+          Number(
+            request.headers.get(
+              'X-Duration'
+            ) || 0
+          )
+
+        const suppliedSize =
+          Number(
+            request.headers.get(
+              'X-File-Size'
+            ) || 0
+          )
+
+        const newSize =
+          suppliedSize > 0
+            ? Math.round(suppliedSize)
+            : repairedBytes.byteLength
+
+        try {
+          await env.AUDIO_BUCKET.put(
+            message.file_path,
+            repairedBytes,
+            {
+              httpMetadata: {
+                contentType:
+                  'audio/mpeg',
+              },
+            }
+          )
+
+          const rows =
+            await sb(
+              env,
+              `/messages?id=eq.${enc(id)}`,
+              {
+                method: 'PATCH',
+                headers:
+                  preferHeaders(env),
+                body:
+                  JSON.stringify({
+                    duration:
+                      duration > 0
+                        ? Math.round(
+                            duration
+                          )
+                        : message.duration,
+                    file_size:
+                      newSize,
+                  }),
+              }
+            )
+
+          if (!rows.length) {
+            throw new Error(
+              'Message metadata update returned no row'
+            )
+          }
+
+          await logActivity(
+            env,
+            userId,
+            'message_audio_repaired',
+            'message',
+            id,
+            {
+              event_id:
+                message.event_id,
+              file_name:
+                message.file_name,
+              original_size:
+                originalBytes.byteLength,
+              repaired_size:
+                newSize,
+              backup_path:
+                backupKey,
+            }
+          )
+
+          return json(
+            {
+              success: true,
+              message: rows[0],
+              backup_path:
+                backupKey,
+            },
+            200,
+            corsHeaders
+          )
+        } catch (error) {
+          // Best-effort rollback: restore the original object if
+          // replacement or metadata update fails.
+          try {
+            await env.AUDIO_BUCKET.put(
+              message.file_path,
+              originalBytes,
+              {
+                httpMetadata:
+                  original.httpMetadata,
+              }
+            )
+          } catch (rollbackError) {
+            console.error(
+              'REPAIR ROLLBACK FAILED:',
+              rollbackError?.message ||
+                rollbackError
+            )
+          }
+
+          throw error
+        }
+      }
+
+      // ======================================================
       // ADMIN AUDIO
       // ======================================================
 
