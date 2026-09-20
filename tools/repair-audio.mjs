@@ -730,6 +730,47 @@ async function main() {
   )
 
   // ==========================================================
+  // REPAIR API PREFLIGHT
+  // ==========================================================
+
+  console.log(
+    '\nChecking repair API capability...'
+  )
+
+  let repairStatus
+
+  try {
+    repairStatus =
+      await apiJson(
+        token,
+        '/repair/status'
+      )
+  } catch (error) {
+    throw new Error(
+      'REPAIR PREFLIGHT FAILED\n\n' +
+      'The Audio Guestbook API does not currently support ' +
+      'the repair endpoint, or the deployed API is out of date.\n\n' +
+      'No recordings were changed.\n\n' +
+      `Server response: ${error?.message || error}`
+    )
+  }
+
+  if (
+    !repairStatus?.ok ||
+    !repairStatus?.repair
+  ) {
+    throw new Error(
+      'REPAIR PREFLIGHT FAILED\n\n' +
+      'The Audio Guestbook API repair capability is unavailable.\n\n' +
+      'No recordings were changed.'
+    )
+  }
+
+  console.log(
+    'Repair API ready.'
+  )
+
+  // ==========================================================
   // GET EVENTS
   // ==========================================================
 
