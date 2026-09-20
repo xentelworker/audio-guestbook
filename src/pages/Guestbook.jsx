@@ -306,15 +306,20 @@ function Guestbook({ slug }) {
   }
 
   function handleContinuousEnded(index) {
-    if (!continuousPlay) {
+    // Do not rely on the continuousPlay value captured by the
+    // audio element's render. During rapid state transitions that
+    // value can be stale and can restart/stop the wrong item.
+    if (continuousIndex !== index) {
       return
     }
 
     const nextIndex = index + 1
 
     if (nextIndex >= messages.length) {
+      beginNewPlaybackRequest()
       setContinuousPlay(false)
       setContinuousIndex(-1)
+      setAudioLoadingId(null)
       return
     }
 
